@@ -544,7 +544,7 @@ Item {
     // Stable and unique: a Quickshell toplevel always reports class
     // org.quickshell, so the title is the only thing a Hyprland window rule can
     // match on. Never put dynamic content here.
-    title: "Plugin Manager"
+    title: "Marketplace"
     color: Color.background
 
     implicitWidth: 1180
@@ -623,7 +623,7 @@ Item {
           spacing: Style.spacing.controlGap
 
           Text {
-            text: "Plugin Manager"
+            text: "Marketplace"
             color: Color.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.heading
