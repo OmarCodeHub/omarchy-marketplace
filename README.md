@@ -42,6 +42,9 @@ The menu row lives in `~/.config/omarchy/extensions/omarchy-menu.jsonc`, which
 is outside this plugin's directory, so `omarchy plugin remove` leaves it behind
 — delete it by hand if you uninstall.
 
+Close it with `Esc`, or with your window manager's close binding (`Super+W`
+under Omarchy's defaults) — there is no close button in the header.
+
 ## Settings
 
 **Settings** in the header covers where this plugin sits in your bar and how

@@ -703,13 +703,6 @@ Item {
             onClicked: root.showSettings = !root.showSettings
           }
 
-          Button {
-            iconText: "✕"
-            tooltipText: "Close"
-            fontSize: Style.font.bodySmall
-            horizontalPadding: Style.spacing.controlGap
-            onClicked: root.requestClose()
-          }
         }
 
         // ───────────────────────────────── body
