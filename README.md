@@ -193,7 +193,7 @@ Two constraints worth knowing before changing the UI:
 ## Installing it
 
 ```bash
-omarchy plugin add https://github.com/OmarCodeHub/omarchy-plugin-manager.git --enable
+omarchy plugin add https://github.com/OmarCodeHub/omarchy-marketplace.git --enable
 ```
 
 ## Removing it
