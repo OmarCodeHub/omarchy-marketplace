@@ -25,12 +25,11 @@ marketplace, install, update, enable, disable and remove — without a terminal.
 
 ## Opening it
 
-Four ways in, so hiding the bar icon never strands it:
+Three ways in, so hiding the bar icon never strands it:
 
 - the puzzle glyph in the bar (unless Settings has it hidden);
 - **Omarchy menu → Setup → Plugins → Plugin Manager** — or just type "plugin
   manager" or "marketplace" into the menu's search;
-- **Plugin Manager** in your app launcher;
 - the shell directly:
 
 ```bash
@@ -39,9 +38,8 @@ omarchy-shell shell summon io.github.omarcodehub.plugin-manager '{"select":"acme
 omarchy-shell shell summon io.github.omarcodehub.plugin-manager '{"view":"settings"}'      # open Settings
 ```
 
-The menu rows live in `~/.config/omarchy/extensions/omarchy-menu.jsonc` and the
-launcher entry in `~/.local/share/applications/omarchy-plugin-manager.desktop`;
-both are outside this plugin's directory, so `omarchy plugin remove` leaves them
+The menu rows live in `~/.config/omarchy/extensions/omarchy-menu.jsonc`, which
+is outside this plugin's directory, so `omarchy plugin remove` leaves them
 behind — delete them by hand if you uninstall.
 
 ## Settings
@@ -56,8 +54,7 @@ often it looks for updates:
 | **Check for updates** | Hourly · 3 hours · 12 hours · never |
 
 Choosing **Never** is safe because the app is still reachable from the Omarchy
-menu and the app launcher. It hides the icon rather than taking the plugin out
-of the bar layout. That layout entry is also what marks the plugin *enabled*, and the shell
+menu. It hides the icon rather than taking the plugin out of the bar layout. That layout entry is also what marks the plugin *enabled*, and the shell
 refuses to summon a plugin it thinks is disabled — removing the entry would hide
 the icon by making the app unreachable. An invisible widget collapses its bar
 slot to zero width instead (verified: `debugBarGeometry` reports `w=0` against
@@ -202,13 +199,9 @@ omarchy plugin add https://github.com/OmarCodeHub/omarchy-plugin-manager.git --e
 omarchy plugin remove io.github.omarcodehub.plugin-manager
 ```
 
-That leaves two files behind, because they live outside the plugin directory:
-
-```bash
-rm ~/.local/share/applications/omarchy-plugin-manager.desktop
-# and delete the two "setup.plugin.manager*" rows from
-# ~/.config/omarchy/extensions/omarchy-menu.jsonc
-```
+That leaves the menu rows behind, because they live outside the plugin
+directory — delete the two `setup.plugin.manager*` rows from
+`~/.config/omarchy/extensions/omarchy-menu.jsonc`.
 
 ## License
 
