@@ -1,4 +1,4 @@
-# Plugin Manager
+# Marketplace
 
 A plugin manager for Omarchy, as a shell panel: browse the 2,200-plugin
 marketplace, install, update, enable, disable and remove — without a terminal.
@@ -28,7 +28,7 @@ marketplace, install, update, enable, disable and remove — without a terminal.
 Three ways in, so hiding the bar icon never strands it:
 
 - the puzzle glyph in the bar (unless Settings has it hidden);
-- **Omarchy menu → Setup → Plugins → Plugin Manager** — or just type "plugin
+- **Omarchy menu → Setup → Plugins → Marketplace** — or just type "plugin
   manager" or "marketplace" into the menu's search;
 - the shell directly:
 
@@ -76,12 +76,12 @@ window rules — a Quickshell toplevel always reports `class = org.quickshell`,
 so the title is the only usable selector. In `~/.config/hypr/hyprland.lua`:
 
 ```lua
-o.window({ class = "^org\\.quickshell$", title = "^Plugin Manager$" }, { tag = "+plugins-window" })
-o.window({ tag = "plugins-window" }, { float = true })
-o.window({ tag = "plugins-window" }, { center = true })
-o.window({ tag = "plugins-window" }, { size = { 1180, 760 } })
-o.window({ tag = "plugins-window" }, { tag = "-default-opacity" })
-o.window({ tag = "plugins-window" }, { opacity = "1 1" })
+o.window({ class = "^org\\.quickshell$", title = "^Marketplace$" }, { tag = "+marketplace-window" })
+o.window({ tag = "marketplace-window" }, { float = true })
+o.window({ tag = "marketplace-window" }, { center = true })
+o.window({ tag = "marketplace-window" }, { size = { 1180, 760 } })
+o.window({ tag = "marketplace-window" }, { tag = "-default-opacity" })
+o.window({ tag = "marketplace-window" }, { opacity = "1 1" })
 ```
 
 Without them the panel still works. It reflows instead: the sidebar drops below
