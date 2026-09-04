@@ -19,14 +19,14 @@ shell, the real marketplace feed and your actually-installed plugins, not
 fixtures.
 
 ```bash
-git clone https://github.com/OmarCodeHub/omarchy-plugin-manager.git
-cd omarchy-plugin-manager
+git clone https://github.com/OmarCodeHub/omarchy-marketplace.git
+cd omarchy-marketplace
 ```
 
 To run your working copy, install it:
 
 ```bash
-omarchy plugin add https://github.com/OmarCodeHub/omarchy-plugin-manager.git --enable
+omarchy plugin add https://github.com/OmarCodeHub/omarchy-marketplace.git --enable
 ```
 
 …then edit in `~/.config/omarchy/plugins/io.github.omarcodehub.plugin-manager/`
