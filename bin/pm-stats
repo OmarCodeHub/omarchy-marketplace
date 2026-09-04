@@ -1,0 +1,82 @@
+#!/bin/bash
+# Engagement counts from the marketplace: hearts, views and copy-installs.
+#
+# These do not ship in catalog.json. They live behind the marketplace's own API
+# (https://api.omarchyplugins.com/v1/stats), which returns every plugin's totals
+# in one ~36KB document keyed by plugin id.
+#
+# The API sends `cache-control: no-store` and offers no ETag, so there is no
+# conditional GET to make -- this caches locally on a short TTL instead, which
+# is enough to keep opening the panel from hammering it.
+#
+# Usage: pm-stats [--refresh]
+#
+# Always exits 0 when it can emit something. Hearts are decoration: if the API
+# is down the panel should still browse and install, so a failure degrades to
+# `{"ok":false,...,"plugins":{}}` rather than an error.
+
+set -uo pipefail
+
+STATS_URL="https://api.omarchyplugins.com/v1/stats"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/io.github.omarcodehub.plugin-manager"
+STATS="$CACHE_DIR/stats.json"
+MAX_AGE=300
+
+FORCE=0
+while (($# > 0)); do
+  case "$1" in
+  --refresh) FORCE=1; shift ;;
+  -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+  *) echo "pm-stats: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+mkdir -p "$CACHE_DIR"
+
+cache_age() {
+  [[ -f $STATS ]] || { echo 999999; return; }
+  local now mtime
+  now=$(date +%s)
+  mtime=$(stat -c %Y "$STATS" 2>/dev/null || echo 0)
+  echo $((now - mtime))
+}
+
+refresh() {
+  local tmp
+  tmp=$(mktemp "$CACHE_DIR/.stats.XXXXXX") || return 1
+  if ! curl -sfL --compressed --max-time 20 -o "$tmp" "$STATS_URL" 2>/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+  # A truncated or HTML body must never replace a good cache.
+  if jq -e '(.plugins | type) == "object"' "$tmp" >/dev/null 2>&1; then
+    mv -f "$tmp" "$STATS"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+ONLINE=false
+if ((FORCE)) || [[ ! -f $STATS ]] || (($(cache_age) > MAX_AGE)); then
+  if refresh; then ONLINE=true; fi
+else
+  ONLINE=true
+fi
+
+if [[ ! -f $STATS ]]; then
+  echo '{"ok":false,"online":false,"count":0,"plugins":{}}'
+  exit 0
+fi
+
+jq -c --argjson online "$ONLINE" '
+  {
+    ok: true,
+    online: $online,
+    count: (.plugins | length),
+    plugins: (.plugins | with_entries(.value |= {
+      hearts: (.hearts // 0),
+      views: (.views // 0),
+      copies: (.copies // 0)
+    }))
+  }' "$STATS" 2>/dev/null || echo '{"ok":false,"online":false,"count":0,"plugins":{}}'

@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.omarcodehub.plugin-manager",
+  "name": "Plugin Manager",
+  "version": "1.0.0",
+  "author": "OmarCodeHub",
+  "description": "Browse the Omarchy marketplace and install, update, enable, disable or remove shell plugins from one panel",
+  "kinds": [
+    "panel",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "panel": "Panel.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "panel": {
+    "displayName": "Plugin Manager",
+    "description": "Plugin manager: browse the marketplace, install, update and remove",
+    "defaults": {
+      "catalogRefreshMinutes": 60,
+      "updateCheckMinutes": 180,
+      "showPreviews": true,
+      "verifiedOnly": false
+    }
+  },
+  "barWidget": {
+    "displayName": "Plugin Manager",
+    "description": "Opens the plugin manager, and shows a count when plugin updates are waiting",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "updateCheckMinutes": 180,
+      "showInBar": "always"
+    },
+    "schema": [
+      {
+        "key": "showInBar",
+        "type": "enum",
+        "label": "Show in the bar",
+        "options": [
+          "always",
+          "updates",
+          "never"
+        ],
+        "defaultValue": "always",
+        "description": "Always, only while plugin updates are waiting, or never."
+      },
+      {
+        "key": "updateCheckMinutes",
+        "type": "integer",
+        "label": "Check for updates every (minutes)",
+        "min": 0,
+        "max": 1440,
+        "step": 15,
+        "defaultValue": 180,
+        "description": "How often to ask each installed plugin's origin whether it has moved. 0 turns the recurring check off."
+      }
+    ]
+  },
+  "homepage": "https://github.com/OmarCodeHub/omarchy-plugin-manager"
+}

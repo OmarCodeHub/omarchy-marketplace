@@ -1,0 +1,88 @@
+#!/bin/bash
+# Check installed git-managed plugins for available updates, without applying
+# anything and without downloading objects.
+#
+# `omarchy plugin update` fetches and compares HEAD to FETCH_HEAD. `git
+# ls-remote origin HEAD` answers the same question with one ref lookup (~0.3s)
+# and no writes to the checkout, so it is safe to run for every plugin on a
+# timer. Checks run in parallel because they are all network-latency bound.
+#
+# Usage: pm-updates [--id <plugin-id>] [--timeout <seconds>]
+
+set -uo pipefail
+
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
+
+PLUGINS_DIR="$HOME/.config/omarchy/plugins"
+ONLY=""
+TIMEOUT=20
+
+while (($# > 0)); do
+  case "$1" in
+  --id) ONLY="${2:-}"; shift 2 ;;
+  --timeout) TIMEOUT="${2:-20}"; shift 2 ;;
+  -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+  *) echo "pm-updates: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ $TIMEOUT =~ ^[0-9]+$ ]] || TIMEOUT=20
+
+check_one() {
+  local dir="$1" id
+  id=$(basename "$dir")
+
+  local head remote_head branch status="ok" detail=""
+  head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
+  remote_head=$(timeout "$TIMEOUT" git -C "$dir" ls-remote origin HEAD 2>/dev/null | awk 'NR==1{print $1}')
+  if [[ -z $remote_head ]]; then
+    status="unreachable"
+    detail="could not reach origin"
+  fi
+
+  # A checkout with local edits cannot be fast-forwarded, which is exactly how
+  # omarchy-plugin-update fails. Say so here instead of offering an update that
+  # is guaranteed to be refused.
+  local dirty=false
+  [[ -n $(git -C "$dir" status --porcelain 2>/dev/null) ]] && dirty=true
+
+  local behind=false
+  if [[ $status == ok && -n $head && -n $remote_head && $head != "$remote_head" ]]; then
+    behind=true
+  fi
+
+  jq -nc --arg id "$id" --arg head "$head" --arg remoteHead "${remote_head:-}" \
+    --arg branch "$branch" --arg status "$status" --arg detail "$detail" \
+    --argjson behind "$behind" --argjson dirty "$dirty" \
+    '{id: $id, current: $head[0:7], currentFull: $head, remote: $remoteHead[0:7],
+      remoteFull: $remoteHead, branch: $branch, behind: $behind, dirty: $dirty,
+      status: $status, detail: $detail}'
+}
+
+targets=()
+if [[ -d $PLUGINS_DIR ]]; then
+  for dir in "$PLUGINS_DIR"/*/; do
+    [[ -d $dir/.git ]] || continue
+    [[ -n $ONLY && $(basename "$dir") != "$ONLY" ]] && continue
+    targets+=("$dir")
+  done
+fi
+
+if ((${#targets[@]} == 0)); then
+  echo '{"ok":true,"checked":0,"available":0,"updates":[]}'
+  exit 0
+fi
+
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+
+for dir in "${targets[@]}"; do
+  check_one "$dir" >"$tmp/$(basename "$dir").json" &
+done
+wait
+
+jq -sc '{ok: true, checked: length, available: (map(select(.behind)) | length), updates: .}' \
+  "$tmp"/*.json

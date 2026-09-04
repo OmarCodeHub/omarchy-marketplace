@@ -1,0 +1,100 @@
+#!/bin/bash
+# Inventory of everything installed on this machine, as one JSON document.
+#
+# Three sources are joined by plugin id:
+#   omarchy plugin list --json   enabled/active/canDisable/firstParty/clonedFrom
+#   omarchy-plugin-catalog       sourceDir, kinds, entry points, descriptions
+#   the plugin's own manifest    version and author, which neither of the above carry
+# plus git remote/HEAD for user plugins, which is what update checking compares.
+#
+# Usage: pm-local
+
+set -uo pipefail
+
+PLUGINS_DIR="$HOME/.config/omarchy/plugins"
+
+list=$(omarchy plugin list --json 2>/dev/null) || list="[]"
+[[ -n $list ]] || list="[]"
+catalog=$(omarchy-plugin-catalog 2>/dev/null) || catalog="[]"
+[[ -n $catalog ]] || catalog="[]"
+
+# Per-directory facts the omarchy commands do not expose. Emitted as one JSON
+# object per line and slurped below, so a plugin with an odd name cannot split
+# a record.
+git_facts() {
+  local dir id
+  [[ -d $PLUGINS_DIR ]] || return 0
+  for dir in "$PLUGINS_DIR"/*/; do
+    [[ -d $dir ]] || continue
+    id=$(basename "$dir")
+    [[ $id == .* ]] && continue
+
+    local version="" author="" homepage=""
+    if [[ -f $dir/manifest.json ]]; then
+      version=$(jq -r '.version // ""' "$dir/manifest.json" 2>/dev/null)
+      author=$(jq -r '.author // ""' "$dir/manifest.json" 2>/dev/null)
+      homepage=$(jq -r '.homepage // .repository // ""' "$dir/manifest.json" 2>/dev/null)
+    fi
+
+    local managed=false remote="" head="" branch="" dirty=0
+    if [[ -d $dir/.git ]]; then
+      managed=true
+      remote=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "")
+      head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+      branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      dirty=$(git -C "$dir" status --porcelain 2>/dev/null | wc -l)
+    fi
+
+    jq -nc \
+      --arg id "$id" --arg version "$version" --arg author "$author" \
+      --arg homepage "$homepage" --argjson managed "$managed" \
+      --arg remote "$remote" --arg head "$head" --arg branch "$branch" \
+      --argjson dirty "${dirty:-0}" \
+      '{id: $id, version: $version, author: $author, homepage: $homepage,
+        git: {managed: $managed, remote: $remote, head: $head,
+              branch: $branch, dirty: ($dirty > 0)}}'
+  done
+}
+
+locals=$(git_facts | jq -sc '.')
+[[ -n $locals ]] || locals="[]"
+
+jq -nc \
+  --argjson list "$list" \
+  --argjson catalog "$catalog" \
+  --argjson locals "$locals" '
+  ($catalog | map({key: .id, value: .}) | from_entries) as $cat
+  | ($locals | map({key: .id, value: .}) | from_entries) as $loc
+  | [ $list[]
+      | . as $p
+      | ($cat[$p.id] // {}) as $c
+      | ($loc[$p.id] // {}) as $l
+      | {
+          id: $p.id,
+          name: $p.name,
+          description: ($c.description // ""),
+          kinds: ($p.kinds // []),
+          enabled: $p.enabled,
+          active: $p.active,
+          canDisable: $p.canDisable,
+          firstParty: $p.firstParty,
+          clonedFrom: ($p.clonedFrom // ""),
+          sourceDir: ($c.sourceDir // ""),
+          entryPoints: ($c.entryPoints // {}),
+          settingsSchema: (($c.barWidget.schema // $c.panel.schema) // []),
+          version: ($l.version // ""),
+          author: ($l.author // ""),
+          homepage: ($l.homepage // ""),
+          git: ($l.git // {managed: false, remote: "", head: "", branch: "", dirty: false})
+        }
+    ]
+  | {
+      ok: true,
+      plugins: .,
+      counts: {
+        total: length,
+        installed: (map(select(.firstParty | not)) | length),
+        enabled: (map(select(.enabled)) | length),
+        gitManaged: (map(select(.git.managed)) | length)
+      }
+    }'

@@ -1,0 +1,134 @@
+#!/bin/bash
+# Fetch, cache and reduce the official Omarchy plugin marketplace catalog.
+#
+# The upstream feed (https://plugins.omarchy.org/catalog.json) is ~5.4MB of JSON
+# describing every listed plugin. Handing that to the QML JSON parser on every
+# panel open is wasteful, so this reduces it to the ~1MB the UI actually reads
+# and caches both. GitHub Pages serves a strong ETag and max-age=600, so the
+# refresh path is a conditional GET that comes back 304 with an empty body.
+#
+# Usage: pm-catalog [--refresh] [--detail <plugin-id>]
+#   (default)          reduced index from cache, refreshed if older than max-age
+#   --refresh          force a conditional GET before emitting
+#   --detail <id>      full catalog record for one plugin, from cache
+#
+# Always exits 0 when it can emit something: a stale cache beats an error
+# dialog. The "stale" and "online" fields tell the UI what it is looking at.
+
+set -uo pipefail
+
+CATALOG_URL="https://plugins.omarchy.org/catalog.json"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/io.github.omarcodehub.plugin-manager"
+FULL="$CACHE_DIR/catalog.json"
+ETAG="$CACHE_DIR/catalog.etag"
+INDEX="$CACHE_DIR/index.json"
+MAX_AGE=600
+
+FORCE=0
+DETAIL=""
+
+while (($# > 0)); do
+  case "$1" in
+  --refresh) FORCE=1; shift ;;
+  --detail) DETAIL="${2:-}"; shift 2 ;;
+  -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+  *) echo "pm-catalog: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+mkdir -p "$CACHE_DIR"
+
+cache_age() {
+  [[ -f $FULL ]] || { echo 999999; return; }
+  local now mtime
+  now=$(date +%s)
+  mtime=$(stat -c %Y "$FULL" 2>/dev/null || echo 0)
+  echo $((now - mtime))
+}
+
+# Download into a temp file and only swap it in on a real 200. A 304 writes no
+# body, and pointing curl -o straight at the cache would truncate it to nothing.
+refresh() {
+  local tmp code
+  tmp=$(mktemp "$CACHE_DIR/.catalog.XXXXXX") || return 1
+  code=$(curl -sL --compressed --max-time 45 \
+    --etag-compare "$ETAG" --etag-save "$ETAG" \
+    -o "$tmp" -w '%{http_code}' "$CATALOG_URL" 2>/dev/null)
+  case "$code" in
+  200)
+    if jq -e 'has("plugins") and (.plugins | type == "array")' "$tmp" >/dev/null 2>&1; then
+      mv -f "$tmp" "$FULL"
+      rm -f "$INDEX"
+      return 0
+    fi
+    # A truncated or HTML error body must never replace a good cache.
+    rm -f "$tmp"
+    return 1
+    ;;
+  304)
+    rm -f "$tmp"
+    touch "$FULL" 2>/dev/null
+    return 0
+    ;;
+  *)
+    rm -f "$tmp"
+    return 1
+    ;;
+  esac
+}
+
+ONLINE=false
+if ((FORCE)) || [[ ! -f $FULL ]] || (($(cache_age) > MAX_AGE)); then
+  if refresh; then ONLINE=true; fi
+else
+  ONLINE=true
+fi
+
+if [[ ! -f $FULL ]]; then
+  echo '{"ok":false,"online":false,"stale":true,"error":"no catalog cached and the marketplace is unreachable","generatedAt":"","plugins":[]}'
+  exit 0
+fi
+
+if [[ -n $DETAIL ]]; then
+  jq -c --arg id "$DETAIL" '.plugins[] | select(.id == $id)' "$FULL" 2>/dev/null || echo 'null'
+  exit 0
+fi
+
+# Rebuild the reduced index only when the full catalog is newer than it.
+if [[ ! -f $INDEX || $FULL -nt $INDEX ]]; then
+  tmp=$(mktemp "$CACHE_DIR/.index.XXXXXX") || exit 1
+  if jq -c '{
+      generatedAt: (.generatedAt // ""),
+      plugins: [ .plugins[] | {
+        id, name, author, category, kind, version,
+        description: (.description // ""),
+        tags: (.tags // []),
+        license: (.license // ""),
+        installNote: (.installNote // ""),
+        shot: (.previewImage // ""),
+        repo: (.repo // ""),
+        stars: (.stars // 0),
+        verified: (.verificationStatus == "verified"),
+        installable: (.installAvailable // false),
+        builtIn: (.builtIn // false),
+        initials: (.initials // ""),
+        accent: (.accent // ""),
+        thumb: (.previewThumbnail // ""),
+        repoUpdatedAt: (.repositoryUpdatedAt // "")
+      } ]
+    }' "$FULL" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$INDEX"
+  else
+    rm -f "$tmp"
+    echo '{"ok":false,"online":false,"stale":true,"error":"cached catalog could not be parsed","generatedAt":"","plugins":[]}'
+    exit 0
+  fi
+fi
+
+age=$(cache_age)
+stale=false
+((age > MAX_AGE)) && stale=true
+
+jq -c --argjson online "$ONLINE" --argjson stale "$stale" --argjson age "$age" \
+  '. + {ok: true, online: $online, stale: $stale, ageSeconds: $age, count: (.plugins | length)}' \
+  "$INDEX"

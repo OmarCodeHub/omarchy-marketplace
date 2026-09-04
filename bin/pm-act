@@ -1,0 +1,238 @@
+#!/bin/bash
+# The only place this plugin is allowed to change the system.
+#
+# Every mutating action goes through here as a VERB plus validated arguments.
+# Nothing from the marketplace feed is ever executed: the catalog ships an
+# `installCommand` string, and this deliberately ignores it, taking only the
+# repository URL and rebuilding the argv itself. A feed that is compromised or
+# merely wrong can therefore name a bad repo -- which the user still has to
+# approve -- but cannot name a command.
+#
+# Every omarchy CLI call gets --yes, because there is no terminal here for gum
+# to prompt in and those commands refuse rather than hang without it. The
+# confirmation the user actually sees is the dialog in the panel.
+#
+# Usage:
+#   pm-act check-url <git-url>          validate a URL without doing anything
+#   pm-act install <git-url> [--no-enable]
+#   pm-act update <plugin-id>
+#   pm-act diff <plugin-id>             read-only preview of a pending update
+#   pm-act remove <plugin-id>
+#   pm-act enable <plugin-id> [section]
+#   pm-act disable <plugin-id>
+#
+# Output is the child command's stdout and stderr, interleaved, line by line,
+# terminated by a sentinel the UI keys on:
+#   __PM_DONE__ <exit-code>
+
+set -uo pipefail
+
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
+
+PLUGINS_DIR="$HOME/.config/omarchy/plugins"
+
+done_with() {
+  # The sentinel marks the end of the stream for anything tailing the log;
+  # the exit status is what pm-job actually branches on.
+  echo "__PM_DONE__ $1"
+  exit "$1"
+}
+
+abort() {
+  echo "$*" >&2
+  done_with 2
+}
+
+valid_id() {
+  [[ ${1:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${1:-} != *..* ]]
+}
+
+require_installed() {
+  local id="$1"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  [[ -d $PLUGINS_DIR/$id ]] || abort "'$id' is not installed under $PLUGINS_DIR."
+}
+
+# Mirrors omarchy-git-url-check and adds the tighter rule this GUI wants: a
+# plugin arrives over https from a named host, so a local path or a bare scp
+# target is refused before the CLI ever sees it.
+check_url() {
+  local url="${1:-}"
+  [[ -n $url ]] || { echo "A repository URL is required."; return 1; }
+  [[ $url != -* ]] || { echo "That is a git option, not a repository URL."; return 1; }
+  [[ ${#url} -le 2048 ]] || { echo "That URL is implausibly long."; return 1; }
+  [[ $url != *[$'\n\r\t']* ]] || { echo "That URL contains a control character."; return 1; }
+  if [[ $url != https://* ]]; then
+    echo "Only https:// repository URLs can be installed from here."
+    return 1
+  fi
+  if ! omarchy-git-url-check "$url" 2>/dev/null; then
+    echo "Omarchy refuses that URL: it names a git option or transport helper."
+    return 1
+  fi
+  return 0
+}
+
+# The shell watches the plugins directory, but a rescan makes the panel's own
+# view consistent immediately rather than on the next filesystem event.
+rescan() {
+  omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true
+}
+
+verb="${1:-}"
+shift || true
+
+case "$verb" in
+check-url)
+  if msg=$(check_url "${1:-}"); then
+    echo "OK"
+    done_with 0
+  else
+    echo "$msg"
+    done_with 1
+  fi
+  ;;
+
+install)
+  url="${1:-}"
+  enable_flag="--enable"
+  [[ ${2:-} == "--no-enable" ]] && enable_flag=""
+  if ! msg=$(check_url "$url"); then
+    echo "$msg" >&2
+    done_with 2
+  fi
+  echo "→ omarchy plugin add $url ${enable_flag:+$enable_flag }--yes"
+  echo
+  if [[ -n $enable_flag ]]; then
+    omarchy plugin add "$url" --enable --yes 2>&1
+  else
+    omarchy plugin add "$url" --yes 2>&1
+  fi
+  rc=$?
+  rescan
+  done_with $rc
+  ;;
+
+update)
+  id="${1:-}"
+  require_installed "$id"
+  [[ -d $PLUGINS_DIR/$id/.git ]] || abort "'$id' is not a git checkout, so there is nothing to pull."
+  echo "→ omarchy plugin update $id --yes"
+  echo
+  omarchy plugin update "$id" --yes 2>&1
+  rc=$?
+  rescan
+  done_with $rc
+  ;;
+
+diff)
+  # Read-only: fetch updates .git but never touches the checkout, which is
+  # exactly what the user is asking to preview before it is merged.
+  id="${1:-}"
+  require_installed "$id"
+  dir="$PLUGINS_DIR/$id"
+  [[ -d $dir/.git ]] || abort "'$id' is not a git checkout."
+  if ! timeout 45 git -C "$dir" fetch --quiet origin HEAD 2>&1; then
+    echo "Could not reach origin for $id." >&2
+    done_with 1
+  fi
+  head=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
+  fetched=$(git -C "$dir" rev-parse FETCH_HEAD 2>/dev/null)
+  if [[ $head == "$fetched" ]]; then
+    echo "Already up to date."
+    done_with 0
+  fi
+  echo "Commits to be applied:"
+  git -C "$dir" log --no-color --oneline --no-decorate "HEAD..FETCH_HEAD" 2>&1 | head -50
+  echo
+  echo "Files changed:"
+  git -C "$dir" diff --no-color --stat "HEAD" "FETCH_HEAD" 2>&1 | tail -40
+  if [[ -n $(git -C "$dir" status --porcelain 2>/dev/null) ]]; then
+    echo
+    echo "NOTE: this checkout has local edits, so the update cannot fast-forward."
+  fi
+  done_with 0
+  ;;
+
+remove)
+  id="${1:-}"
+  require_installed "$id"
+  echo "→ omarchy plugin remove $id --yes"
+  echo
+  omarchy plugin remove "$id" --yes 2>&1
+  rc=$?
+  rescan
+  done_with $rc
+  ;;
+
+enable)
+  id="${1:-}"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  section="${2:-}"
+  if [[ -n $section ]]; then
+    case "$section" in
+    left | center | right) ;;
+    *) abort "Section must be left, center or right." ;;
+    esac
+    echo "→ omarchy plugin enable $id --section $section"
+    echo
+    omarchy plugin enable "$id" --section "$section" 2>&1
+  else
+    echo "→ omarchy plugin enable $id"
+    echo
+    omarchy plugin enable "$id" 2>&1
+  fi
+  rc=$?
+  rescan
+  done_with $rc
+  ;;
+
+disable)
+  id="${1:-}"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  echo "→ omarchy plugin disable $id"
+  echo
+  omarchy plugin disable "$id" 2>&1
+  rc=$?
+  rescan
+  done_with $rc
+  ;;
+
+# The two below reconfigure a bar widget rather than installing anything, so
+# they do not rescan: the shell picks up a shell.json change on its own, and a
+# rescan would needlessly destroy every open panel.
+bar-move)
+  id="${1:-}"
+  section="${2:-}"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  case "$section" in
+  left | center | right) ;;
+  *) abort "Section must be left, center or right." ;;
+  esac
+  omarchy bar move "$id" --section "$section" 2>&1
+  done_with $?
+  ;;
+
+bar-set)
+  id="${1:-}"
+  key="${2:-}"
+  value="${3:-}"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  # An allowlist, not a passthrough: this verb must not become a way to write
+  # arbitrary keys into another widget's shell.json entry.
+  case "$key" in
+  showInBar | updateCheckMinutes) ;;
+  *) abort "Not a setting this plugin manages: '$key'." ;;
+  esac
+  [[ $value =~ ^[A-Za-z0-9_-]{1,32}$ ]] || abort "Invalid value for $key."
+  omarchy bar set "$id" "$key" "$value" 2>&1
+  done_with $?
+  ;;
+
+*)
+  echo "pm-act: unknown verb '${verb}'" >&2
+  sed -n '15,25p' "$0" >&2
+  done_with 2
+  ;;
+esac

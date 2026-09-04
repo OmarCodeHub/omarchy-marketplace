@@ -1,0 +1,87 @@
+#!/bin/bash
+# Runs one mutating action detached from the panel that asked for it, then
+# brings the panel back.
+#
+# This indirection is not defensive programming, it is the only thing that
+# works. Every omarchy plugin command ends by calling
+# `omarchy-shell shell rescanPlugins`, and that reload sets `panelEntries = []`
+# in shell.qml, which destroys every panel delegate -- `keepLoaded` included.
+# The panel that started the install is therefore killed part-way through it.
+# A Quickshell `Process` owned by that panel dies with it (Process has no
+# detach property), so the install would be interrupted and its output lost.
+#
+# So: the panel calls Quickshell.execDetached on this script and forgets about
+# it. This process outlives the panel, writes progress to files the reborn
+# panel reads, and re-summons the panel when it is done. State lives on disk
+# because nothing in the QML object survives.
+#
+# Usage: pm-job <plugin-id> <job-dir> <job-id> <verb> [args...]
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+plugin_id="${1:-}"
+job_dir="${2:-}"
+job_id="${3:-}"
+shift 3 || true
+
+if [[ -z $plugin_id || -z $job_dir || -z $job_id || $# -eq 0 ]]; then
+  echo "pm-job: usage: pm-job <plugin-id> <job-dir> <job-id> <verb> [args...]" >&2
+  exit 2
+fi
+
+# A job id becomes a filename, so it may not wander out of the job directory.
+if [[ ! $job_id =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "pm-job: invalid job id" >&2
+  exit 2
+fi
+
+mkdir -p "$job_dir" || exit 1
+status_file="$job_dir/$job_id.json"
+log_file="$job_dir/$job_id.log"
+
+verb="$1"
+
+# Written in place, never via a temp file and rename: a rename gives the file a
+# new inode, which drops the inotify watch behind FileView.watchChanges, and the
+# panel would stop seeing updates after the first one.
+put_status() {
+  local state="$1" exit_code="$2"
+  printf '{"id":"%s","verb":"%s","state":"%s","exit":%s}\n' \
+    "$job_id" "$verb" "$state" "$exit_code" >"$status_file"
+}
+
+: >"$log_file"
+put_status running null
+
+if "$HERE/pm-act" "$@" >>"$log_file" 2>&1; then
+  code=0
+else
+  code=$?
+fi
+
+state=done
+((code == 0)) || state=failed
+put_status "$state" "$code"
+
+# Bringing the panel back is not one call. `unloadPanels()` clears the queued
+# payloads, so a summon that lands inside the reload window is dropped on the
+# floor, and a second reload can be queued behind the first. Retry until the
+# live panel confirms it received this job id -- `shell call` answers the
+# literal string "unknown" while the panel is unloaded.
+for _ in $(seq 1 80); do
+  # -q on the summon: best-effort, and its return value says nothing useful.
+  omarchy-shell -q shell summon "$plugin_id" "{\"resume\":\"$job_id\"}" >/dev/null 2>&1
+  # NO -q on the call: quiet mode suppresses stdout, so the answer would always
+  # be empty and this loop would re-summon the panel eighty times over.
+  if [[ $(omarchy-shell shell call "$plugin_id" resumeStatus "$job_id" 2>/dev/null) == shown ]]; then
+    exit "$code"
+  fi
+  sleep 0.1
+done
+
+# The panel never came back (the user may have disabled this plugin, or the
+# shell may have gone away). The status file is still on disk, so the next
+# open shows the result.
+exit "$code"

@@ -1,0 +1,60 @@
+#!/bin/bash
+# Where this plugin's bar widget currently sits, and what it is configured with.
+#
+# The shell owns shell.json and rewrites it whenever the bar changes, so this
+# asks the running shell for the effective config rather than reading the file
+# and racing it. Falling back to the file matters only when the shell is not up,
+# in which case nothing can be applied anyway.
+#
+# Usage: pm-settings [--id <plugin-id>]
+
+set -uo pipefail
+
+ID="io.github.omarcodehub.plugin-manager"
+while (($# > 0)); do
+  case "$1" in
+  --id) ID="${2:-}"; shift 2 ;;
+  -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
+  *) echo "pm-settings: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ $ID =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $ID != *..* ]] || {
+  echo '{"ok":false,"error":"invalid plugin id"}'
+  exit 0
+}
+
+config=$(omarchy-shell shell listShellConfig 2>/dev/null)
+source="shell"
+if ! jq -e . >/dev/null 2>&1 <<<"$config"; then
+  config=$(cat "$HOME/.config/omarchy/shell.json" 2>/dev/null)
+  source="file"
+fi
+if ! jq -e . >/dev/null 2>&1 <<<"$config"; then
+  echo '{"ok":false,"error":"could not read the shell configuration"}'
+  exit 0
+fi
+
+# A layout entry is either a bare id string or an object carrying the id plus
+# that widget's inline settings. Both shapes have to be searched.
+jq -c --arg id "$ID" --arg source "$source" '
+  . as $cfg
+  | ([ ($cfg.bar.layout // {}) | to_entries[] as $sec
+       | ($sec.value // []) | to_entries[] as $ent
+       | select((if ($ent.value | type) == "object" then $ent.value.id else $ent.value end) == $id)
+       | { section: $sec.key,
+           index: $ent.key,
+           settings: (if ($ent.value | type) == "object"
+                      then ($ent.value | del(.id)) else {} end) }
+     ] | .[0]) as $found
+  | {
+      ok: true,
+      source: $source,
+      id: $id,
+      inBar: ($found != null),
+      section: ($found.section // ""),
+      index: ($found.index // -1),
+      settings: ($found.settings // {}),
+      inPluginsArray: ((($cfg.plugins // []) | index($id)) != null),
+      barPosition: ($cfg.bar.position // "top")
+    }' <<<"$config" 2>/dev/null || echo '{"ok":false,"error":"could not parse the shell configuration"}'
