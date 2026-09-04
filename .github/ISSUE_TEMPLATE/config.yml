@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A plugin listed in the marketplace is broken
+    url: https://plugins.omarchy.org/
+    about: >
+      If a plugin you installed misbehaves, report it to that plugin's own
+      repository. This app only installs it.
+  - name: Omarchy itself
+    url: https://github.com/omacom/omarchy
+    about: Bugs in the shell, the bar or the omarchy commands belong upstream.

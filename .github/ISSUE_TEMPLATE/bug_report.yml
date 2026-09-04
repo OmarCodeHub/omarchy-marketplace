@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in the Plugin Manager does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report a **security** problem here. If you have found a way
+        to make this plugin run something the user did not approve — a URL that
+        escapes validation, a feed value that reaches a shell — email the
+        maintainer instead of opening a public issue.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        1. Opened the panel from the bar
+        2. Searched for "weather"
+        3. Clicked Install on ...
+        Expected: ...
+        Got: ...
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: "`jq -r .version ~/.config/omarchy/plugins/io.github.omarcodehub.plugin-manager/manifest.json`"
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: omarchy-version
+    attributes:
+      label: Omarchy version
+      description: "Output of `omarchy version`"
+      placeholder: "4.0.2-1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Shell log
+      description: |
+        The panel logs to the shell's own log. Grab the relevant lines:
+        `qs log $(ls -t /run/user/$UID/quickshell/by-id/*/log.qslog | head -1) | grep -i plugin-manager | tail -40`
+        Errors from images appear under `scene:` rather than `qml:`, so include those too.
+      render: text
+
+  - type: textarea
+    id: checks
+    attributes:
+      label: Check output
+      description: |
+        If you can run them, paste anything that fails:
+        `node test-model.js` · `qmllint -I /usr/share/omarchy/shell *.qml` · `omarchy plugin validate .`
+      render: text
+
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: Before filing
+      options:
+        - label: I restarted the shell (`omarchy restart shell`) and it still happens
+          required: true
+        - label: This is not a problem with a plugin I installed *through* this app
+          required: false

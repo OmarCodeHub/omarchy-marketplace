@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest something the Plugin Manager should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The task you are stuck on, not the feature you have in mind for it.
+      placeholder: "I keep installing plugins I later can't identify in my bar, because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you think would help
+      description: Optional. A rough shape is fine; the problem above matters more.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Browsing and search
+        - Install / update / remove
+        - The detail pane
+        - Settings and bar placement
+        - The bar widget
+        - Something else
+    validations:
+      required: true

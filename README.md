@@ -38,9 +38,9 @@ omarchy-shell shell summon io.github.omarcodehub.plugin-manager '{"select":"acme
 omarchy-shell shell summon io.github.omarcodehub.plugin-manager '{"view":"settings"}'      # open Settings
 ```
 
-The menu rows live in `~/.config/omarchy/extensions/omarchy-menu.jsonc`, which
-is outside this plugin's directory, so `omarchy plugin remove` leaves them
-behind — delete them by hand if you uninstall.
+The menu row lives in `~/.config/omarchy/extensions/omarchy-menu.jsonc`, which
+is outside this plugin's directory, so `omarchy plugin remove` leaves it behind
+— delete it by hand if you uninstall.
 
 ## Settings
 
@@ -199,9 +199,15 @@ omarchy plugin add https://github.com/OmarCodeHub/omarchy-plugin-manager.git --e
 omarchy plugin remove io.github.omarcodehub.plugin-manager
 ```
 
-That leaves the menu rows behind, because they live outside the plugin
-directory — delete the two `setup.plugin.manager*` rows from
+That leaves the menu row behind, because it lives outside the plugin directory
+— delete the `setup.plugin.manager` row from
 `~/.config/omarchy/extensions/omarchy-menu.jsonc`.
+
+## Contributing
+
+`main` is protected: work on a branch and open a pull request. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the checks a change has to pass and for
+the handful of constraints that are load-bearing rather than stylistic.
 
 ## License
 
