@@ -1,0 +1,4 @@
+# Every file is owned by the maintainer, so a pull request cannot be approved
+# by anyone else. Combined with "Require review from Code Owners" on the main
+# branch, this is what makes @OmarCodeHub the only approver.
+*       @OmarCodeHub
