@@ -24,6 +24,11 @@ ETAG="$CACHE_DIR/catalog.etag"
 INDEX="$CACHE_DIR/index.json"
 MAX_AGE=600
 
+# 32 MiB. The feed is about 5.4 MB decompressed today, so this is ample
+# headroom while still bounding what a hostile or broken origin can make this
+# write and parse.
+MAX_BYTES=$((32 * 1024 * 1024))
+
 FORCE=0
 DETAIL=""
 
@@ -39,52 +44,98 @@ done
 mkdir -p "$CACHE_DIR"
 
 cache_age() {
-  [[ -f $FULL ]] || { echo 999999; return; }
+  [[ -s $FULL ]] || { echo 999999; return; }
   local now mtime
   now=$(date +%s)
   mtime=$(stat -c %Y "$FULL" 2>/dev/null || echo 0)
   echo $((now - mtime))
 }
 
-# Download into a temp file and only swap it in on a real 200. A 304 writes no
-# body, and pointing curl -o straight at the cache would truncate it to nothing.
+# Downloads are bounded on both axes, because a deadline does not bound size:
+# a fast or highly compressible response can fill the disk long before
+# --max-time expires.
+#
+#   --proto '=https'  nothing but HTTPS, ever
+#   no -L             redirects are refused outright rather than constrained;
+#                     the canonical URL answers 200 directly, so following them
+#                     buys nothing and widens where the bytes may come from
+#   --max-filesize    rejects a response whose announced length is too large,
+#                     before any of it is transferred
+#   head -c MAX+1     bounds what actually reaches the disk. This is the control
+#                     that matters: for a chunked or compressed body the real
+#                     size is only known as it arrives, and this caps the
+#                     DECOMPRESSED bytes, which is what jq would then parse.
+#
+# Reading one byte past the cap is deliberate — it is how an oversized response
+# is detected rather than silently truncated into something jq might accept.
 refresh() {
-  local tmp code
+  local tmp hdr code size rc
   tmp=$(mktemp "$CACHE_DIR/.catalog.XXXXXX") || return 1
-  code=$(curl -sL --compressed --max-time 45 \
+  hdr=$(mktemp "$CACHE_DIR/.hdr.XXXXXX") || { rm -f "$tmp"; return 1; }
+
+  curl -s --proto '=https' --compressed --max-time 45 \
+    --max-filesize "$MAX_BYTES" \
     --etag-compare "$ETAG" --etag-save "$ETAG" \
-    -o "$tmp" -w '%{http_code}' "$CATALOG_URL" 2>/dev/null)
+    -D "$hdr" "$CATALOG_URL" 2>/dev/null \
+    | head -c "$((MAX_BYTES + 1))" >"$tmp"
+  rc=${PIPESTATUS[0]}
+
+  code=$(awk 'toupper($1) ~ /^HTTP/ { c = $2 } END { print c + 0 }' "$hdr" 2>/dev/null)
+  size=$(stat -c %s "$tmp" 2>/dev/null || echo 0)
+  rm -f "$hdr"
+
+  # Over the cap: head let one byte past through, so the body was too big.
+  if ((size > MAX_BYTES)); then
+    echo "pm-catalog: refusing a catalog larger than $MAX_BYTES bytes" >&2
+    rm -f "$tmp" "$ETAG"
+    return 1
+  fi
+
   case "$code" in
   200)
+    # curl exit 63 is --max-filesize; anything non-zero means an incomplete body.
+    if ((rc != 0)); then
+      rm -f "$tmp" "$ETAG"
+      return 1
+    fi
     if jq -e 'has("plugins") and (.plugins | type == "array")' "$tmp" >/dev/null 2>&1; then
       mv -f "$tmp" "$FULL"
       rm -f "$INDEX"
       return 0
     fi
-    # A truncated or HTML error body must never replace a good cache.
-    rm -f "$tmp"
+    # A truncated or HTML error body must never replace a good cache, and the
+    # ETag that produced it must not survive to earn a 304 next time.
+    rm -f "$tmp" "$ETAG"
     return 1
     ;;
   304)
     rm -f "$tmp"
+    # Not modified since *what*? If the cache is gone the saved ETag is lying,
+    # and touching $FULL here would mint an empty file that later runs would
+    # treat as a valid catalog. Drop the ETag and fail so the next attempt is a
+    # full GET.
+    if [[ ! -s $FULL ]]; then
+      rm -f "$ETAG" "$FULL"
+      return 1
+    fi
     touch "$FULL" 2>/dev/null
     return 0
     ;;
   *)
-    rm -f "$tmp"
+    rm -f "$tmp" "$ETAG"
     return 1
     ;;
   esac
 }
 
 ONLINE=false
-if ((FORCE)) || [[ ! -f $FULL ]] || (($(cache_age) > MAX_AGE)); then
+if ((FORCE)) || [[ ! -s $FULL ]] || (($(cache_age) > MAX_AGE)); then
   if refresh; then ONLINE=true; fi
 else
   ONLINE=true
 fi
 
-if [[ ! -f $FULL ]]; then
+if [[ ! -s $FULL ]]; then
   echo '{"ok":false,"online":false,"stale":true,"error":"no catalog cached and the marketplace is unreachable","generatedAt":"","plugins":[]}'
   exit 0
 fi
