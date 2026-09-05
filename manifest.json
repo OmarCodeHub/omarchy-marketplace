@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "io.github.omarcodehub.plugin-manager",
-  "name": "Marketplace",
+  "name": "Plugin Depot",
   "version": "1.0.0",
   "author": "OmarCodeHub",
   "description": "Browse the Omarchy marketplace and install, update, enable, disable or remove shell plugins from one panel",
@@ -14,7 +14,7 @@
     "barWidget": "BarWidget.qml"
   },
   "panel": {
-    "displayName": "Marketplace",
+    "displayName": "Plugin Depot",
     "description": "Plugin manager: browse the marketplace, install, update and remove",
     "defaults": {
       "catalogRefreshMinutes": 60,
@@ -24,8 +24,8 @@
     }
   },
   "barWidget": {
-    "displayName": "Marketplace",
-    "description": "Opens the plugin marketplace, and shows a count when plugin updates are waiting",
+    "displayName": "Plugin Depot",
+    "description": "Opens Plugin Depot, and shows a count when plugin updates are waiting",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",

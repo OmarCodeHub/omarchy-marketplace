@@ -22,6 +22,10 @@ CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/io.github.omarcodehub.plugin-manager"
 STATS="$CACHE_DIR/stats.json"
 MAX_AGE=300
 
+# 8 MiB. The document is about 40 KB today; this bounds what a hostile or
+# broken origin can make this write and parse.
+MAX_BYTES=$((8 * 1024 * 1024))
+
 FORCE=0
 while (($# > 0)); do
   case "$1" in
@@ -34,21 +38,44 @@ done
 mkdir -p "$CACHE_DIR"
 
 cache_age() {
-  [[ -f $STATS ]] || { echo 999999; return; }
+  [[ -s $STATS ]] || { echo 999999; return; }
   local now mtime
   now=$(date +%s)
   mtime=$(stat -c %Y "$STATS" 2>/dev/null || echo 0)
   echo $((now - mtime))
 }
 
+# Bounded on both axes for the same reason as pm-catalog: a deadline does not
+# bound size. No -L (the endpoint answers 200 directly, so redirects are refused
+# rather than constrained), HTTPS only, an announced-size rejection, and a hard
+# cap on the decompressed bytes that reach the disk.
 refresh() {
-  local tmp
+  local tmp hdr code size rc
   tmp=$(mktemp "$CACHE_DIR/.stats.XXXXXX") || return 1
-  if ! curl -sfL --compressed --max-time 20 -o "$tmp" "$STATS_URL" 2>/dev/null; then
+  hdr=$(mktemp "$CACHE_DIR/.hdr.XXXXXX") || { rm -f "$tmp"; return 1; }
+
+  curl -s --proto '=https' --compressed --max-time 20 \
+    --max-filesize "$MAX_BYTES" \
+    -D "$hdr" "$STATS_URL" 2>/dev/null \
+    | head -c "$((MAX_BYTES + 1))" >"$tmp"
+  rc=${PIPESTATUS[0]}
+
+  code=$(awk 'toupper($1) ~ /^HTTP/ { c = $2 } END { print c + 0 }' "$hdr" 2>/dev/null)
+  size=$(stat -c %s "$tmp" 2>/dev/null || echo 0)
+  rm -f "$hdr"
+
+  if ((size > MAX_BYTES)); then
+    echo "pm-stats: refusing a stats document larger than $MAX_BYTES bytes" >&2
     rm -f "$tmp"
     return 1
   fi
-  # A truncated or HTML body must never replace a good cache.
+
+  if ((rc != 0)) || [[ $code != 200 ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  # A truncated or HTML error body must never replace a good cache.
   if jq -e '(.plugins | type) == "object"' "$tmp" >/dev/null 2>&1; then
     mv -f "$tmp" "$STATS"
     return 0
@@ -58,13 +85,13 @@ refresh() {
 }
 
 ONLINE=false
-if ((FORCE)) || [[ ! -f $STATS ]] || (($(cache_age) > MAX_AGE)); then
+if ((FORCE)) || [[ ! -s $STATS ]] || (($(cache_age) > MAX_AGE)); then
   if refresh; then ONLINE=true; fi
 else
   ONLINE=true
 fi
 
-if [[ ! -f $STATS ]]; then
+if [[ ! -s $STATS ]]; then
   echo '{"ok":false,"online":false,"count":0,"plugins":{}}'
   exit 0
 fi
