@@ -190,6 +190,81 @@ Item {
   readonly property var categories: root.records.length
     ? Model.categoriesOf(root.records, root.scope) : []
 
+  // ─────────────────────────────────────────────── previews
+  // No Image in this plugin ever points at a remote URL. Rows ask for a
+  // catalogue-relative path, bin/pm-preview fetches it from the fixed origin
+  // under byte, time, dimension and concurrency limits, and only the validated
+  // local file is displayed. Requests are batched on a short timer so scrolling
+  // does not spawn a process per row.
+  property var previewCache: ({})
+  property var previewPending: ({})
+  property var previewQueue: []
+  property int previewRevision: 0
+
+  function requestPreview(rel) {
+    if (!rel || root.binDir === "")
+      return
+    if (root.previewCache[rel] !== undefined || root.previewPending[rel] === true)
+      return
+    root.previewPending[rel] = true
+    root.previewQueue.push(rel)
+    previewTimer.restart()
+  }
+
+  // previewRevision is passed in by callers purely so the binding re-evaluates
+  // when a batch lands; the value itself is unused.
+  function previewSource(rel, revision) {
+    if (!rel)
+      return ""
+    var local = root.previewCache[rel]
+    return local ? "file://" + local : ""
+  }
+
+  Timer {
+    id: previewTimer
+    interval: 200
+    onTriggered: root.flushPreviews()
+  }
+
+  Process {
+    id: previewProc
+    property var batch: []
+    command: root.binDir === "" || batch.length === 0
+      ? [] : [root.binDir + "/pm-preview"].concat(batch)
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var next = ({})
+        for (var k in root.previewCache)
+          next[k] = root.previewCache[k]
+        var lines = String(text || "").split("\n")
+        for (var i = 0; i < lines.length; i++) {
+          if (!lines[i])
+            continue
+          var parts = lines[i].split("\t")
+          if (parts.length === 2 && parts[1])
+            next[parts[0]] = parts[1]
+        }
+        root.previewCache = next
+        root.previewRevision++
+      }
+    }
+    onExited: {
+      // Anything the helper declined stays out of the cache; clearing it from
+      // pending would only make the row ask again on every scroll.
+      previewProc.batch = []
+      if (root.previewQueue.length > 0)
+        previewTimer.restart()
+    }
+  }
+
+  function flushPreviews() {
+    if (previewProc.running || root.previewQueue.length === 0 || root.binDir === "")
+      return
+    previewProc.batch = root.previewQueue.splice(0, 40)
+    previewProc.running = true
+  }
+
   // ─────────────────────────────────────────────── job state
   property string jobId: ""
   property var job: null
@@ -308,10 +383,21 @@ Item {
 
     var record = pending.record
     var args = []
-    if (pending.verb === "install")
-      args = ["install", record.repo]
-    else
+    if (pending.verb === "install") {
+      // The sha the dialog settled on: the reviewed commit, or the current head
+      // if the user explicitly chose it after being told it is unreviewed.
+      var sha = confirmSheet.chosenSha
+      if (!sha)
+        return
+      args = ["install", record.repo, record.id, sha]
+    } else if (pending.verb === "update") {
+      var target = confirmSheet.chosenSha || record.reviewedCommit
+      if (!target)
+        return
+      args = ["update", record.id, target]
+    } else {
       args = [pending.verb, record.id]
+    }
 
     root.startJob(pending.verb, record.id, args)
   }
@@ -842,6 +928,8 @@ Item {
                 required property int index
                 width: ListView.view.width
                 record: modelData
+                previewFile: root.previewSource(modelData.thumb, root.previewRevision)
+                onRecordChanged: root.requestPreview(record ? record.thumb : "")
                 selected: root.selectedId === modelData.id
                 onClicked: {
                   root.selectedId = modelData.id
@@ -883,6 +971,8 @@ Item {
             visible: (window.wide || window.detailTakesOver) && !root.showSettings
             record: root.selected
             jobRunning: root.jobRunning
+            previewFile: root.previewSource(root.selected ? root.selected.shot : "", root.previewRevision)
+            onRecordChanged: root.requestPreview(record ? record.shot : "")
             showBack: window.detailTakesOver
             onBack: root.selectedId = ""
             onAct: function (verb) { root.requestAction(verb, root.selected) }
@@ -912,6 +1002,7 @@ Item {
 
       // ───────────────────────────────── confirmation
       Confirm {
+        id: confirmSheet
         anchors.fill: parent
         visible: root.pendingAction !== null
         action: root.pendingAction

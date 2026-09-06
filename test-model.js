@@ -234,6 +234,39 @@ for (const p of thirdParty) {
   check(`${p.id}: source dir present`, r.sourceDir.endsWith(p.id))
 }
 
+// ---------------------------------------------------------------- pinning
+
+console.log("reviewed commits and preview paths")
+const listedNow = records.filter(r => r.listed)
+const withCommit = listedNow.filter(r => r.reviewedCommit)
+console.log(`  ${withCommit.length} of ${listedNow.length} listings carry a reviewed commit`)
+check("most listings carry a reviewed commit", withCommit.length > listedNow.length * 0.9,
+  `${withCommit.length}/${listedNow.length}`)
+check("every reviewed commit is a full 40-char sha",
+  withCommit.every(r => /^[0-9a-f]{40}$/.test(r.reviewedCommit)),
+  withCommit.filter(r => !/^[0-9a-f]{40}$/.test(r.reviewedCommit)).slice(0, 2).map(r => r.id).join(","))
+
+// Preview paths must stay relative: the QML never builds a URL, and pm-preview
+// refuses anything that tries to introduce a host or escape the asset tree.
+const withThumb = records.filter(r => r.thumb)
+check("preview paths are relative, never absolute URLs",
+  withThumb.every(r => !/^https?:\/\//.test(r.thumb)),
+  withThumb.filter(r => /^https?:\/\//.test(r.thumb)).slice(0, 2).map(r => r.thumb).join(","))
+check("preview paths stay inside the asset tree",
+  withThumb.every(r => /^assets\/img\//.test(r.thumb) && !r.thumb.includes("..")),
+  withThumb.filter(r => !/^assets\/img\//.test(r.thumb)).slice(0, 2).map(r => r.thumb).join(","))
+check("detail screenshots are relative too",
+  records.filter(r => r.shot).every(r => !/^https?:\/\//.test(r.shot)))
+
+// The installed copy of this plugin should itself be pinnable: its head is a
+// real sha the metadata pane can compare against.
+for (const p of thirdParty) {
+  const r = byId[p.id]
+  if (r.gitManaged) {
+    check(`${p.id}: git head is a full sha`, /^[0-9a-f]{40}$/.test(r.gitHead), r.gitHead)
+  }
+}
+
 // ---------------------------------------------------------------- filtering
 
 console.log("filterAndSort")

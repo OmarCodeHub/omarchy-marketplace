@@ -17,6 +17,9 @@ Item {
   property var record: null
   property bool jobRunning: false
 
+  // A local file:// path supplied by the panel, never a remote URL.
+  property string previewFile: ""
+
   // Set when this pane has replaced the list on a narrow window, so it needs a
   // way back to it.
   property bool showBack: false
@@ -84,7 +87,7 @@ Item {
         Image {
           id: shot
           anchors.fill: parent
-          source: detail.record && detail.record.shot ? detail.record.shot : ""
+          source: detail.previewFile
           asynchronous: true
           fillMode: Image.PreserveAspectFit
           sourceSize.width: Style.space(800)
@@ -388,6 +391,32 @@ Item {
         Layout.fillWidth: true
         label: "Installed at"
         value: detail.record ? detail.record.sourceDir : ""
+      }
+
+      Fact {
+        Layout.fillWidth: true
+        label: "Reviewed at"
+        value: detail.record && detail.record.reviewedCommit
+          ? detail.record.reviewedCommit.substring(0, 12) : ""
+      }
+
+      Fact {
+        Layout.fillWidth: true
+        label: "Pinned"
+        // Whether what is on disk is the commit the marketplace reviewed. This
+        // is the visible payoff of installing a pinned commit rather than a
+        // moving branch head.
+        value: {
+          if (!detail.isInstalled || !detail.record.gitManaged)
+            return ""
+          var reviewed = detail.record.reviewedCommit || ""
+          var head = detail.record.gitHead || ""
+          if (reviewed === "" || head === "")
+            return ""
+          return head === reviewed
+            ? "yes — at the reviewed commit"
+            : "no — this checkout is not the reviewed commit"
+        }
       }
 
       Fact {

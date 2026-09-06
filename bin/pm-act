@@ -14,9 +14,9 @@
 #
 # Usage:
 #   pm-act check-url <git-url>          validate a URL without doing anything
-#   pm-act install <git-url> [--no-enable]
-#   pm-act update <plugin-id>
-#   pm-act diff <plugin-id>             read-only preview of a pending update
+#   pm-act install <git-url> <plugin-id> <sha> [section]
+#   pm-act update <plugin-id> <sha>
+#   pm-act diff <plugin-id> [sha]       read-only preview of a pending update
 #   pm-act remove <plugin-id>
 #   pm-act enable <plugin-id> [section]
 #   pm-act disable <plugin-id>
@@ -28,6 +28,7 @@
 set -uo pipefail
 
 export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/false
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
 
 PLUGINS_DIR="$HOME/.config/omarchy/plugins"
@@ -46,6 +47,12 @@ abort() {
 
 valid_id() {
   [[ ${1:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${1:-} != *..* ]]
+}
+
+# A full 40-character object name. Nothing shorter is accepted: an abbreviated
+# sha can be ambiguous, and a ref name is not a commitment to anything.
+valid_sha() {
+  [[ ${1:-} =~ ^[0-9a-f]{40}$ ]]
 }
 
 require_installed() {
@@ -95,19 +102,74 @@ check-url)
   ;;
 
 install)
+  # Pinned install. The repository URL alone is not enough: a repository can
+  # move after the marketplace reviewed it, so approving a URL is not approving
+  # code. A full 40-character commit is required, only that object is fetched,
+  # and the checkout is verified to be exactly it before anything is activated.
   url="${1:-}"
-  enable_flag="--enable"
-  [[ ${2:-} == "--no-enable" ]] && enable_flag=""
+  want_id="${2:-}"
+  sha="${3:-}"
+  section="${4:-}"
+
   if ! msg=$(check_url "$url"); then
     echo "$msg" >&2
     done_with 2
   fi
-  echo "→ omarchy plugin add $url ${enable_flag:+$enable_flag }--yes"
+  valid_id "$want_id" || abort "Refusing to install an invalid plugin id."
+  valid_sha "$sha" || abort "A full 40-character commit is required to install."
+  [[ ! -e $PLUGINS_DIR/$want_id ]] || abort "'$want_id' is already installed."
+
+  stage="$PLUGINS_DIR/.pin.tmp.$$"
+  rm -rf "$stage"
+  mkdir -p "$stage" || abort "Could not create a staging directory."
+  # The registry skips dot-prefixed directories, so a half-built plugin is never
+  # picked up. Cleared on every exit path.
+  trap 'rm -rf "$stage"' EXIT
+
+  echo "→ fetching ${sha:0:7} from $url"
   echo
-  if [[ -n $enable_flag ]]; then
-    omarchy plugin add "$url" --enable --yes 2>&1
+  git -C "$stage" init -q 2>&1 || abort "Could not initialise the staging repository."
+  git -C "$stage" remote add origin "$url" 2>&1 || abort "Could not set the remote."
+  # Only the reviewed object is fetched. If the repository has moved on, the
+  # newer, unreviewed code is never downloaded at all.
+  if ! git -C "$stage" -c credential.helper= fetch -q --depth 1 \
+      --no-recurse-submodules origin "$sha" 2>&1; then
+    abort "Could not fetch commit ${sha:0:7}. The history may have been rewritten."
+  fi
+  git -C "$stage" checkout -q --detach FETCH_HEAD 2>&1 || abort "Could not check out ${sha:0:7}."
+
+  got=$(git -C "$stage" rev-parse HEAD 2>/dev/null)
+  [[ $got == "$sha" ]] || abort "Checkout verification failed: got ${got:0:7}, wanted ${sha:0:7}."
+  echo "verified HEAD == ${sha:0:7}"
+
+  omarchy plugin validate "$stage" || abort "The plugin failed Omarchy's validation."
+  manifest_id=$(jq -r '.id // empty' "$stage/manifest.json" 2>/dev/null)
+  [[ $manifest_id == "$want_id" ]] ||
+    abort "The repository's manifest id ('$manifest_id') is not the listed id ('$want_id')."
+
+  mv -T "$stage" "$PLUGINS_DIR/$want_id" || abort "Could not move the plugin into place."
+  trap - EXIT
+  echo "installed $want_id at ${sha:0:7}"
+
+  # Enable only once the registry has actually seen the new directory. The
+  # rescan IPC returns before the scan finishes, so the readiness gate is the
+  # id appearing in listPlugins -- the same poll omarchy-plugin-add uses.
+  rescan
+  for _ in $(seq 1 40); do
+    if omarchy plugin list --json 2>/dev/null | jq -e --arg id "$want_id" \
+        'any(.[]; .id == $id)' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.05
+  done
+
+  if [[ -n $section ]]; then
+    case "$section" in
+    left | center | right) omarchy plugin enable "$want_id" --section "$section" 2>&1 ;;
+    *) omarchy plugin enable "$want_id" 2>&1 ;;
+    esac
   else
-    omarchy plugin add "$url" --yes 2>&1
+    omarchy plugin enable "$want_id" 2>&1
   fi
   rc=$?
   rescan
@@ -115,42 +177,83 @@ install)
   ;;
 
 update)
+  # Pinned update: move to the commit the marketplace reviewed, not to whatever
+  # the branch head happens to be. Rolls back if the new tree fails validation.
   id="${1:-}"
+  sha="${2:-}"
   require_installed "$id"
-  [[ -d $PLUGINS_DIR/$id/.git ]] || abort "'$id' is not a git checkout, so there is nothing to pull."
-  echo "→ omarchy plugin update $id --yes"
+  dir="$PLUGINS_DIR/$id"
+  [[ -d $dir/.git ]] || abort "'$id' is not a git checkout, so there is nothing to pull."
+  valid_sha "$sha" || abort "A full 40-character commit is required to update."
+
+  [[ -z $(git -C "$dir" status --porcelain 2>/dev/null) ]] ||
+    abort "'$id' has local edits; refusing to overwrite them."
+
+  previous=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
+  [[ $previous != "$sha" ]] || { echo "Already at ${sha:0:7}."; done_with 0; }
+
+  echo "→ fetching ${sha:0:7}"
   echo
-  omarchy plugin update "$id" --yes 2>&1
-  rc=$?
+  if ! git -C "$dir" -c credential.helper= fetch -q --depth 1 \
+      --no-recurse-submodules origin "$sha" 2>&1; then
+    abort "Could not fetch commit ${sha:0:7}. The history may have been rewritten."
+  fi
+  git -C "$dir" checkout -q --detach FETCH_HEAD 2>&1 || abort "Could not check out ${sha:0:7}."
+
+  got=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
+  if [[ $got != "$sha" ]]; then
+    git -C "$dir" checkout -q --detach "$previous" 2>/dev/null
+    abort "Checkout verification failed: got ${got:0:7}, wanted ${sha:0:7}. Rolled back."
+  fi
+
+  if ! omarchy plugin validate "$dir"; then
+    git -C "$dir" checkout -q --detach "$previous" 2>/dev/null
+    abort "The updated tree failed validation. Rolled back to ${previous:0:7}."
+  fi
+
+  echo "updated $id: ${previous:0:7} -> ${sha:0:7}"
   rescan
-  done_with $rc
+  done_with 0
   ;;
 
 diff)
-  # Read-only: fetch updates .git but never touches the checkout, which is
-  # exactly what the user is asking to preview before it is merged.
+  # Read-only preview of what an update would bring in. Fetching writes to .git
+  # but never touches the checkout, which is the point: review before applying.
   id="${1:-}"
+  sha="${2:-}"
   require_installed "$id"
   dir="$PLUGINS_DIR/$id"
   [[ -d $dir/.git ]] || abort "'$id' is not a git checkout."
-  if ! timeout 45 git -C "$dir" fetch --quiet origin HEAD 2>&1; then
-    echo "Could not reach origin for $id." >&2
-    done_with 1
+
+  if [[ -n $sha ]]; then
+    valid_sha "$sha" || abort "That is not a full 40-character commit."
+    target="$sha"
+    if ! timeout 45 git -C "$dir" fetch -q --no-recurse-submodules origin "$sha" 2>&1; then
+      echo "Could not fetch ${sha:0:7} to compare against." >&2
+      done_with 1
+    fi
+  else
+    if ! timeout 45 git -C "$dir" fetch --quiet origin HEAD 2>&1; then
+      echo "Could not reach origin for $id." >&2
+      done_with 1
+    fi
+    target=$(git -C "$dir" rev-parse FETCH_HEAD 2>/dev/null)
   fi
+
   head=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
-  fetched=$(git -C "$dir" rev-parse FETCH_HEAD 2>/dev/null)
-  if [[ $head == "$fetched" ]]; then
+  if [[ $head == "$target" ]]; then
     echo "Already up to date."
     done_with 0
   fi
+
   echo "Commits to be applied:"
-  git -C "$dir" log --no-color --oneline --no-decorate "HEAD..FETCH_HEAD" 2>&1 | head -50
+  git -C "$dir" log --no-color --oneline --no-decorate "HEAD..$target" 2>&1 | head -50
   echo
   echo "Files changed:"
-  git -C "$dir" diff --no-color --stat "HEAD" "FETCH_HEAD" 2>&1 | tail -40
+  git -C "$dir" diff --no-color --stat "HEAD" "$target" 2>&1 | tail -40
   if [[ -n $(git -C "$dir" status --porcelain 2>/dev/null) ]]; then
     echo
-    echo "NOTE: this checkout has local edits, so the update cannot fast-forward."
+    echo "NOTE: this checkout has local edits, so the update cannot be applied."
   fi
   done_with 0
   ;;

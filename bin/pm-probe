@@ -1,0 +1,53 @@
+#!/bin/bash
+# Read-only: what commit does this repository actually point at right now, and
+# does it still match the one the marketplace reviewed?
+#
+# The catalogue tells us which commit was reviewed. It cannot tell us what the
+# repository holds *now* — a repository can move after review, which is exactly
+# the gap this answers. So the reviewed commit comes from the feed and the
+# current head is observed directly with `git ls-remote`, and the panel compares
+# two independent sources rather than trusting one.
+#
+# Nothing is fetched, cloned or written. This only asks the remote for its refs.
+#
+# Usage: pm-probe <https-repo-url> [reviewed-sha]
+# Output: one JSON object.
+
+set -uo pipefail
+
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/false
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
+
+fail() {
+  jq -nc --arg error "$1" '{ok: false, error: $error}'
+  exit 0
+}
+
+url="${1:-}"
+reviewed="${2:-}"
+
+[[ -n $url ]] || fail "a repository URL is required"
+[[ $url == https://* ]] || fail "only https:// repository URLs are supported"
+[[ $url != -* ]] || fail "that is a git option, not a repository URL"
+omarchy-git-url-check "$url" >/dev/null 2>&1 || fail "Omarchy refuses that URL"
+
+if [[ -n $reviewed && ! $reviewed =~ ^[0-9a-f]{40}$ ]]; then
+  fail "the reviewed commit is not a full 40-character sha"
+fi
+
+head_sha=$(timeout 25 git ls-remote "$url" HEAD 2>/dev/null | awk 'NR==1{print $1}')
+[[ $head_sha =~ ^[0-9a-f]{40}$ ]] || fail "could not reach the repository"
+
+if [[ -z $reviewed ]]; then
+  jq -nc --arg head "$head_sha" \
+    '{ok: true, head: $head, reviewed: "", pinnable: false, moved: null,
+      note: "the marketplace has no reviewed commit for this listing"}'
+  exit 0
+fi
+
+moved=true
+[[ $head_sha == "$reviewed" ]] && moved=false
+
+jq -nc --arg head "$head_sha" --arg reviewed "$reviewed" --argjson moved "$moved" \
+  '{ok: true, head: $head, reviewed: $reviewed, pinnable: true, moved: $moved}'

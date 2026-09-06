@@ -165,6 +165,8 @@ if [[ ! -f $INDEX || $FULL -nt $INDEX ]]; then
         initials: (.initials // ""),
         accent: (.accent // ""),
         thumb: (.previewThumbnail // ""),
+        reviewedCommit: (.upstreamValidatedCommit // .listingValidatedCommit // ""),
+        observedCommit: (.upstreamObservedCommit // ""),
         repoUpdatedAt: (.repositoryUpdatedAt // "")
       } ]
     }' "$FULL" >"$tmp" 2>/dev/null; then
