@@ -26,9 +26,49 @@ Item {
   readonly property string verb: action ? String(action.verb) : ""
   readonly property bool destructive: verb === "remove"
 
+  // ── the pin ────────────────────────────────────────────────────────────
+  // The catalogue says which commit was reviewed; bin/pm-probe observes what
+  // the repository points at right now. Two independent sources, so the feed
+  // cannot quietly claim a repository has not moved.
+  readonly property bool pinning: verb === "install" || verb === "update"
+  readonly property string reviewedSha: record && record.reviewedCommit ? String(record.reviewedCommit) : ""
+  property var probe: null
+  property bool probing: false
+  property bool acceptHead: false
+
+  readonly property string headSha: probe && probe.head ? String(probe.head) : ""
+  readonly property bool moved: probe !== null && probe.ok === true && probe.moved === true
+  readonly property string probeError: probe && probe.ok === false ? String(probe.error || "") : ""
+
+  // What will actually be installed. Defaults to the reviewed commit; only an
+  // explicit opt-in switches it to the unreviewed head.
+  readonly property string chosenSha: {
+    if (!pinning)
+      return ""
+    if (acceptHead && headSha !== "")
+      return headSha
+    return reviewedSha
+  }
+
+  readonly property bool canProceed: {
+    if (!pinning)
+      return true
+    if (probing)
+      return false
+    return chosenSha !== ""
+  }
+
   onActionChanged: {
     diffText = ""
-    if (action && verb === "update" && record && binDir !== "") {
+    probe = null
+    acceptHead = false
+    if (!action || binDir === "")
+      return
+    if (pinning && record && record.repo) {
+      probing = true
+      probeProc.running = true
+    }
+    if (verb === "update" && record) {
       diffText = "Fetching the incoming changes..."
       diffProc.running = true
     }
@@ -145,6 +185,78 @@ Item {
         }
       }
 
+      // What commit is about to be installed, and whether it is the one the
+      // marketplace actually looked at.
+      Rectangle {
+        Layout.fillWidth: true
+        visible: confirm.pinning
+        implicitHeight: pinCol.implicitHeight + Style.spacing.lg
+        radius: Style.cornerRadius
+        color: Util.alpha(confirm.moved ? Color.urgent : Color.foreground, 0.08)
+
+        ColumnLayout {
+          id: pinCol
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.spacing.sm
+          spacing: Style.spacing.xs
+
+          Text {
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            color: confirm.moved ? Color.urgent : Color.menu.text
+            text: {
+              if (confirm.probing)
+                return "Checking what the repository points at now..."
+              if (confirm.probeError !== "")
+                return "Could not reach the repository: " + confirm.probeError
+              if (confirm.reviewedSha === "")
+                return "The marketplace has no reviewed commit for this listing, so "
+                  + "there is nothing to pin to. Installing is not offered."
+              if (!confirm.moved)
+                return "The repository is still at the commit the marketplace reviewed. "
+                  + "Only that commit will be fetched."
+              return "This repository has moved since the marketplace reviewed it. "
+                + "The newer code has not been reviewed."
+            }
+          }
+
+          Text {
+            Layout.fillWidth: true
+            visible: confirm.reviewedSha !== ""
+            textFormat: Text.PlainText
+            wrapMode: Text.WrapAnywhere
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            color: Util.alpha(Color.menu.text, 0.7)
+            text: {
+              var out = "reviewed  " + confirm.reviewedSha.substring(0, 12)
+              if (confirm.headSha !== "" && confirm.moved)
+                out += "\nnow       " + confirm.headSha.substring(0, 12)
+              return out
+            }
+          }
+
+          // Only offered once the repository is known to have moved. The
+          // reviewed commit stays the default; taking the head is a deliberate
+          // act, not a slip.
+          ButtonGroup {
+            visible: confirm.moved && confirm.reviewedSha !== ""
+            options: [
+              { value: "reviewed", label: "Install reviewed" },
+              { value: "head", label: "Install newest (unreviewed)" }
+            ]
+            value: confirm.acceptHead ? "head" : "reviewed"
+            fontSize: Style.font.caption
+            onChanged: function (v) { confirm.acceptHead = (v === "head") }
+          }
+        }
+      }
+
       Text {
         Layout.fillWidth: true
         visible: confirm.verb === "install"
@@ -205,6 +317,7 @@ Item {
 
         Button {
           bordered: true
+          enabled: confirm.canProceed
           foreground: confirm.destructive ? Color.urgent : Color.foreground
           text: {
             switch (confirm.verb) {
@@ -223,9 +336,27 @@ Item {
   }
 
   Process {
+    id: probeProc
+    command: confirm.binDir === "" || !confirm.record || !confirm.record.repo
+      ? [] : [confirm.binDir + "/pm-probe", confirm.record.repo, confirm.reviewedSha]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        confirm.probing = false
+        try {
+          confirm.probe = JSON.parse(text || "null")
+        } catch (e) {
+          confirm.probe = null
+        }
+      }
+    }
+    onExited: confirm.probing = false
+  }
+
+  Process {
     id: diffProc
     command: confirm.binDir === "" || !confirm.record
-      ? [] : [confirm.binDir + "/pm-act", "diff", confirm.record.id]
+      ? [] : [confirm.binDir + "/pm-act", "diff", confirm.record.id, confirm.reviewedSha]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

@@ -1,0 +1,103 @@
+#!/bin/bash
+# Fetch marketplace preview images into a local cache, under limits, and print
+# where they landed.
+#
+# The QML never points an Image at a remote URL. It asks for a catalogue-supplied
+# relative path, this fetches it, and the UI displays only the validated local
+# file. That keeps every bound on the producer side, where they can be enforced:
+#
+#   fixed origin      the URL is built here from a relative path that must match
+#                     a strict pattern. A path cannot introduce a host, a scheme,
+#                     a parent directory, or a query.
+#   no -L             redirects refused, so the fixed origin stays fixed
+#   --proto '=https'  nothing but HTTPS
+#   --max-time        a deadline per image
+#   --max-filesize    rejects an announced oversize before transfer
+#   head -c MAX+1     bounds the bytes that reach the disk, which is the control
+#                     that matters when the length is not announced
+#   file(1) checks    the bytes must actually be an allowed image type, and its
+#                     dimensions must be sane, before the UI is told about it
+#   xargs -P          bounded concurrency, so a slow origin cannot fan out
+#
+# Usage: pm-preview <relative-path>...
+# Output: one "<relative-path>\t<local-file>" line per image now available.
+# Anything that fails a check is simply omitted; the UI falls back to its tile.
+
+set -uo pipefail
+
+ORIGIN="https://plugins.omarchy.org/"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/io.github.omarcodehub.plugin-manager/previews"
+
+MAX_BYTES=$((4 * 1024 * 1024))   # previews run 20-300 KB; this is generous
+MAX_DIM=4000                     # refuse a decompression bomb's dimensions
+MAX_TIME=15
+CONCURRENCY=3
+MAX_PATHS=60                     # bound the work one invocation can ask for
+
+# A catalogue path may only name a file under the marketplace's own asset tree.
+valid_path() {
+  local p="$1"
+  [[ -n $p ]] || return 1
+  [[ $p != *..* ]] || return 1
+  [[ $p != /* ]] || return 1
+  [[ $p != *://* ]] || return 1
+  [[ $p =~ ^assets/img/[A-Za-z0-9._/-]+\.(webp|png|jpg|jpeg|avif)$ ]] || return 1
+  return 0
+}
+
+cache_path_for() {
+  local p="$1" ext hash
+  ext="${p##*.}"
+  hash=$(printf '%s' "$p" | sha256sum | cut -d' ' -f1)
+  printf '%s/%s.%s' "$CACHE_DIR" "$hash" "$ext"
+}
+
+# Re-entrant worker: xargs calls back into this script one path at a time so
+# concurrency is bounded by -P rather than by spawning everything at once.
+if [[ ${1:-} == "--fetch-one" ]]; then
+  rel="${2:-}"
+  valid_path "$rel" || exit 0
+  out=$(cache_path_for "$rel")
+  [[ -s $out ]] && { printf '%s\t%s\n' "$rel" "$out"; exit 0; }
+
+  mkdir -p "$CACHE_DIR" || exit 0
+  tmp=$(mktemp "$CACHE_DIR/.fetch.XXXXXX") || exit 0
+  trap 'rm -f "$tmp"' EXIT
+
+  curl -s --proto '=https' --max-time "$MAX_TIME" --max-filesize "$MAX_BYTES" \
+    "${ORIGIN}${rel}" 2>/dev/null | head -c "$((MAX_BYTES + 1))" >"$tmp"
+  rc=${PIPESTATUS[0]}
+  size=$(stat -c %s "$tmp" 2>/dev/null || echo 0)
+
+  ((rc == 0)) || exit 0
+  ((size > 0 && size <= MAX_BYTES)) || exit 0
+
+  # The bytes must be an image of an allowed type, whatever the path claimed.
+  desc=$(file -b "$tmp" 2>/dev/null)
+  case "$desc" in
+  *"WebP image"* | *"PNG image"* | *"JPEG image"* | *"AVIF"* | *"ISO Media"*) ;;
+  *) exit 0 ;;
+  esac
+
+  dims=$(grep -oE '[0-9]+ ?x ?[0-9]+' <<<"$desc" | head -1 | tr -d ' ')
+  if [[ $dims =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    ((BASH_REMATCH[1] <= MAX_DIM && BASH_REMATCH[2] <= MAX_DIM)) || exit 0
+  fi
+
+  mv -f "$tmp" "$out" 2>/dev/null || exit 0
+  trap - EXIT
+  printf '%s\t%s\n' "$rel" "$out"
+  exit 0
+fi
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  sed -n '2,26p' "$0"
+  exit 0
+fi
+
+(($# > 0)) || exit 0
+mkdir -p "$CACHE_DIR" 2>/dev/null
+
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+printf '%s\n' "$@" | head -n "$MAX_PATHS" \
+  | xargs -r -d '\n' -P "$CONCURRENCY" -I {} "$self" --fetch-one {}

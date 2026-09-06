@@ -12,8 +12,11 @@ marketplace, install, update, enable, disable and remove — without a terminal.
   name match should not sit below a 2k-star plugin that merely mentions the
   word — and the chosen sort then orders everything of equal relevance, so the
   control still does something instead of being quietly overridden.
-- **Install** by cloning the listed repository, behind a confirmation that shows
-  you the exact repo and whether the marketplace has reviewed it.
+- **Install the exact commit the marketplace reviewed**, not whatever the branch
+  head has since become. The confirmation names the repository, the reviewed
+  commit, and — checked live against the repository, not taken on the feed's
+  word — whether it has moved since. Only that one commit is fetched, so if the
+  repository has moved on, the unreviewed code is never downloaded at all.
 - **Update** with a read-only preview of the incoming commits and changed files
   *before* anything is applied.
 - **Enable / disable / remove** anything installed.
@@ -103,13 +106,15 @@ bin/            everything that touches the system
 
 ### The data
 
-Four sources are joined by plugin id, falling back to the repository URL:
+Six helpers back the panel; four are joined by plugin id, falling back to the repository URL:
 
 | | |
 |---|---|
 | `bin/pm-catalog` | The official feed at `plugins.omarchy.org/catalog.json` — ~5.4MB, reduced to the ~1.7MB the UI reads. Cached under `$XDG_CACHE_HOME/io.github.omarcodehub.plugin-manager` with a conditional GET, so a refresh inside the feed's 10-minute `max-age` costs one 304. Falls back to the cached copy offline and says so. |
 | `bin/pm-local` | What is actually installed: `omarchy plugin list --json` plus `omarchy-plugin-catalog` plus each plugin's own manifest (for version and author, which neither command reports) plus its git remote. |
 | `bin/pm-updates` | `git ls-remote origin HEAD` per plugin, in parallel — one ref lookup each, no objects downloaded, nothing written to the checkout. Safe to run on a timer. |
+| `bin/pm-probe` | Read-only. Asks the repository, with `git ls-remote`, what it points at *now*, so the panel can compare that against the commit the catalogue says was reviewed. Two independent sources: the feed cannot quietly claim a repository has not moved. |
+| `bin/pm-preview` | Fetches preview images from the marketplace's fixed origin into a local cache, under limits — no redirects, HTTPS only, a deadline, an announced-size rejection, a hard cap on bytes reaching disk, a real-image-and-sane-dimensions check, and bounded concurrency. The UI displays only the validated local file; no `Image` in this plugin ever points at a remote URL. |
 | `bin/pm-stats` | Hearts, views and installs from the marketplace's engagement API (`api.omarchyplugins.com/v1/stats`), which is where those live — they are not in the catalog file. It sends `no-store` and no ETag, so this caches locally on a short TTL instead. Decoration only: if it is down, everything else still works. |
 
 Everything installed shows up whether or not the marketplace lists it, and
@@ -140,6 +145,31 @@ outlives the panel:
 The panel saves its scope, search, selection and scroll position before starting
 a job and restores them on the way back, so the round trip is close to
 invisible. Nothing in the QML object is treated as durable across an action.
+
+### Pinned installs
+
+A repository can change after the marketplace reviews it, so approving a URL is
+not approving code. Every install and update therefore names a full
+40-character commit:
+
+| Repository state | What happens |
+|---|---|
+| still at the reviewed commit | it is installed, no friction |
+| moved past the review | both commits are shown. The reviewed one is the default; taking the newer, unreviewed one is a separate, labelled choice |
+| reviewed commit rewritten away | refused — `git fetch` of that object fails, and a rewritten history is a red flag, not a warning |
+| no reviewed commit in the feed | install is not offered |
+
+The fetch is `git fetch --depth 1 origin <sha>`, so only that object arrives —
+newer code is never downloaded. After checkout, `rev-parse HEAD` must equal the
+requested sha before anything is validated or activated, and the whole thing is
+staged in a dot-prefixed directory the registry ignores until it is verified.
+
+An update moves to the newly reviewed commit and rolls back to the previous one
+if the new tree fails validation. The detail pane's **Pinned** row says whether
+what is on disk is still the reviewed commit.
+
+This does not interfere with `omarchy plugin update` run from a terminal: a
+shallow detached checkout still fast-forwards normally.
 
 ### Talking to the system
 

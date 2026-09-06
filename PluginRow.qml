@@ -22,6 +22,10 @@ Rectangle {
   property var record: null
   property bool selected: false
 
+  // A local file:// path supplied by the panel, never a remote URL. Empty until
+  // bin/pm-preview has fetched and validated the image.
+  property string previewFile: ""
+
   signal clicked()
 
   implicitHeight: Style.space(58)
@@ -61,14 +65,16 @@ Rectangle {
 
     Image {
       anchors.fill: parent
-      source: row.record && row.record.thumb ? row.record.thumb : ""
-      // Mandatory for a remote source: the default is synchronous, which would
-      // block the shell's UI thread on every network fetch.
+      source: row.previewFile
+      // Still asynchronous: this is a local file now, but decoding it on the
+      // shell's UI thread would stutter the list while scrolling.
       asynchronous: true
       // cache is left at its default true. With delegate recycling, cache:false
-      // re-downloads the same thumbnail every time the row scrolls back into
-      // view (~50ms each, forever) instead of 0ms from the pixmap cache.
+      // would re-decode the same thumbnail every time the row scrolls back
+      // into view instead of coming back from the pixmap cache.
       fillMode: Image.PreserveAspectCrop
+      // Caps the decode. The fetcher already refuses oversized dimensions, so
+      // this is the second of two bounds rather than the only one.
       sourceSize.width: Style.space(144)
       retainWhileLoading: true
       visible: status === Image.Ready

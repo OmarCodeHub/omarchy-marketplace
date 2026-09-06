@@ -5,7 +5,6 @@
 // here so the whole file runs under node, which is how it is tested
 // (`node test-model.js`). Panel.qml is wiring and layout only.
 
-var CATALOG_HOST = "https://plugins.omarchy.org/"
 var MARKETPLACE_PAGE = "https://plugins.omarchy.org/plugin.html?id="
 
 // ---------------------------------------------------------------- joining
@@ -113,8 +112,15 @@ function buildRecord(cat, local, update, stat) {
     builtIn: !!(cat && cat.builtIn) || firstParty,
     initials: (cat && cat.initials) || initialsFor((cat && cat.name) || (local && local.name) || "?"),
     accent: (cat && cat.accent) || "",
-    thumb: cat && cat.thumb ? CATALOG_HOST + cat.thumb : "",
-    shot: cat && cat.shot ? CATALOG_HOST + cat.shot : "",
+    // Relative paths, deliberately. Nothing here builds a remote URL: bin/pm-preview
+    // owns the origin, fetches under limits and hands back a local file, and the
+    // UI only ever displays that file.
+    thumb: (cat && cat.thumb) || "",
+    shot: (cat && cat.shot) || "",
+    // The commit the marketplace actually reviewed. Installs and updates pin to
+    // this rather than to whatever the branch head has since become.
+    reviewedCommit: (cat && cat.reviewedCommit) || "",
+    observedCommit: (cat && cat.observedCommit) || "",
     license: (cat && cat.license) || "",
     installNote: (cat && cat.installNote) || "",
     repoUpdatedAt: (cat && cat.repoUpdatedAt) || "",
