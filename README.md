@@ -87,15 +87,10 @@ o.window({ tag = "plugin-depot-window" }, { tag = "-default-opacity" })
 o.window({ tag = "plugin-depot-window" }, { opacity = "1 1" })
 ```
 
-Without them the panel still works. It reflows instead: below 900px there is no
-room for two columns, so selecting a plugin swaps the list out for its details
-and the pane grows a **‹ All plugins** button — Esc, or typing a new search,
-goes back.
-
-The scope and category sidebar is opt-in at every width: **☰** in the header
-opens it, as an inline column when there is room and as a drawer over the list
-when there is not. It starts closed on every open, so the list is the first
-thing you see.
+Without them the panel still works. It reflows instead: the sidebar drops below
+700px, and below 900px there is no room for two columns, so selecting a plugin
+swaps the list out for its details and the pane grows a **‹ All plugins** button
+— Esc, or typing a new search, goes back.
 
 ## How it is put together
 
