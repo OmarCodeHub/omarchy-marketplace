@@ -159,6 +159,8 @@ Item {
   property bool restoreOnLoad: false
   property bool scrollToSelected: false
   property bool showSettings: false
+  // Only meaningful while the window is too narrow for the inline column.
+  property bool sidebarOpen: false
 
   readonly property var selected: {
     if (root.selectedId === "")
@@ -336,6 +338,13 @@ Item {
     }
   }
 
+  function chooseCategory(name) {
+    root.category = root.category === name ? "" : name
+    root.applyFilter()
+    list.contentY = 0
+    root.sidebarOpen = false
+  }
+
   function setScope(next) {
     if (root.scope === next)
       return
@@ -343,6 +352,7 @@ Item {
     root.category = ""
     root.applyFilter()
     list.contentY = 0
+    root.sidebarOpen = false
   }
 
   function selectIndex(i) {
@@ -675,6 +685,8 @@ Item {
           // the list on a narrow window, then the panel itself.
           if (root.pendingAction) {
             root.pendingAction = null
+          } else if (root.sidebarOpen) {
+            root.sidebarOpen = false
           } else if (root.showSettings) {
             root.showSettings = false
           } else if (window.detailTakesOver) {
@@ -718,6 +730,18 @@ Item {
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.spacing.controlGap
+
+          Button {
+            // Only when the inline column cannot fit. Opens the same switcher
+            // as a drawer over the list.
+            visible: !window.showSidebar && !root.showSettings
+            iconText: "\u2630"
+            tooltipText: "Views and categories"
+            selected: root.sidebarOpen
+            fontSize: Style.font.bodySmall
+            horizontalPadding: Style.spacing.controlGap
+            onClicked: root.sidebarOpen = !root.sidebarOpen
+          }
 
           Text {
             text: "Plugin Depot"
@@ -808,62 +832,17 @@ Item {
           Layout.fillHeight: true
           spacing: Style.spacing.lg
 
-          // sidebar
-          ColumnLayout {
+          // sidebar, inline when there is room for a column
+          Sidebar {
             Layout.preferredWidth: Style.space(180)
             Layout.fillHeight: true
-            spacing: Style.spacing.xs
             visible: window.showSidebar && !window.detailTakesOver && !root.showSettings
-
-            Repeater {
-              model: root.scopes
-              delegate: ScopeRow {
-                required property var modelData
-                Layout.fillWidth: true
-                label: modelData.label
-                count: modelData.count
-                highlight: modelData.key === "updates" && modelData.count > 0
-                selected: root.scope === modelData.key
-                onClicked: root.setScope(modelData.key)
-              }
-            }
-
-            PanelSeparator {
-              Layout.fillWidth: true
-              Layout.topMargin: Style.spacing.sm
-              Layout.bottomMargin: Style.spacing.sm
-            }
-
-            Text {
-              visible: root.categories.length > 0
-              text: "CATEGORIES"
-              color: Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              textFormat: Text.PlainText
-              Layout.bottomMargin: Style.spacing.xs
-            }
-
-            ListView {
-              Layout.fillWidth: true
-              Layout.fillHeight: true
-              clip: true
-              reuseItems: true
-              model: root.categories
-              spacing: 0
-              delegate: ScopeRow {
-                required property var modelData
-                width: ListView.view.width
-                label: modelData.name
-                count: modelData.count
-                selected: root.category === modelData.name
-                onClicked: {
-                  root.category = root.category === modelData.name ? "" : modelData.name
-                  root.applyFilter()
-                  list.contentY = 0
-                }
-              }
-            }
+            scopes: root.scopes
+            categories: root.categories
+            scope: root.scope
+            category: root.category
+            onScopeChosen: function (key) { root.setScope(key) }
+            onCategoryChosen: function (name) { root.chooseCategory(name) }
           }
 
           // list
@@ -1037,6 +1016,51 @@ Item {
         }
       }
 
+      // ───────────────────────────────── views drawer
+      // The inline column needs 180px it does not have on a tiled window, so
+      // below that threshold the same switcher opens over the list instead.
+      Item {
+        anchors.fill: parent
+        visible: root.sidebarOpen && !window.showSidebar && !root.showSettings
+
+        Rectangle {
+          anchors.fill: parent
+          color: Color.menu.scrim
+          MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: root.sidebarOpen = false
+          }
+        }
+
+        Rectangle {
+          anchors.left: parent.left
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          width: Math.min(Style.space(230), parent.width * 0.7)
+          color: Color.menu.background
+          border.width: Style.normalBorderWidth
+          border.color: Util.alpha(Color.menu.border, Style.normalBorderAlpha)
+
+          MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: {}
+          }
+
+          Sidebar {
+            anchors.fill: parent
+            anchors.margins: Style.spacing.panelPadding
+            scopes: root.scopes
+            categories: root.categories
+            scope: root.scope
+            category: root.category
+            onScopeChosen: function (key) { root.setScope(key) }
+            onCategoryChosen: function (name) { root.chooseCategory(name) }
+          }
+        }
+      }
+
       // ───────────────────────────────── confirmation
       Confirm {
         id: confirmSheet
@@ -1047,57 +1071,6 @@ Item {
         onConfirmed: root.confirmAction()
         onCancelled: root.pendingAction = null
       }
-    }
-  }
-
-  // A scope or category row in the sidebar.
-  component ScopeRow: Rectangle {
-    id: scopeRow
-
-    property string label: ""
-    property int count: 0
-    property bool selected: false
-    property bool highlight: false
-
-    signal clicked()
-
-    implicitHeight: Style.spacing.popupRowHeight
-    radius: Style.cornerRadius
-    color: scopeRow.selected ? Color.menu.selectedBackground
-      : mouse.containsMouse ? Style.hoverFill : "transparent"
-
-    RowLayout {
-      anchors.fill: parent
-      anchors.leftMargin: Style.spacing.rowPaddingX
-      anchors.rightMargin: Style.spacing.controlGap
-      spacing: Style.spacing.sm
-
-      Text {
-        Layout.fillWidth: true
-        text: scopeRow.label
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        color: scopeRow.selected ? Color.menu.selectedText : Color.foreground
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
-      }
-
-      Text {
-        visible: scopeRow.count > 0
-        text: String(scopeRow.count)
-        textFormat: Text.PlainText
-        color: scopeRow.highlight ? Color.urgent : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-      }
-    }
-
-    MouseArea {
-      id: mouse
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: scopeRow.clicked()
     }
   }
 }
