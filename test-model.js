@@ -128,9 +128,31 @@ check("at least one id-join worked", listedAndInstalled.length >= 1)
 check("joined records carry catalog fields",
   listedAndInstalled.every(r => r.repo && r.category))
 
-const behind = records.filter(r => r.updateAvailable)
-check("update flags agree with the checker",
-  behind.length === updates.available, `${behind.length} vs ${updates.available}`)
+// "An update is available" must mean the same thing the Update button does.
+// The button installs the commit the marketplace reviewed, so detection has to
+// compare against that commit — not the repository's branch head, which may
+// have moved past it. Comparing against the head left an already-updated
+// plugin sitting in the Updates list forever.
+const listedInstalled = records.filter(r => r.installed && r.listed && r.reviewedCommit && r.gitHead)
+for (const r of listedInstalled) {
+  const expected = r.gitHead !== r.reviewedCommit
+  check(`${r.id}: update flag follows the reviewed commit, not the branch head`,
+    r.updateAvailable === expected,
+    `flag=${r.updateAvailable} head=${r.gitHead.slice(0, 7)} reviewed=${r.reviewedCommit.slice(0, 7)}`)
+}
+check("a plugin pinned to its reviewed commit is never listed as needing an update",
+  listedInstalled.filter(r => r.gitHead === r.reviewedCommit).every(r => !r.updateAvailable))
+
+// Anything the marketplace does not list has no reviewed commit, so those still
+// fall back to the git check.
+const unlistedInstalled = records.filter(r => r.installed && !r.reviewedCommit)
+const gitBehind = new Set((updates.updates || []).filter(u => u.behind).map(u => u.id))
+check("unlisted plugins still fall back to the git check",
+  unlistedInstalled.every(r => r.updateAvailable === gitBehind.has(r.id)))
+
+check("the Update button's target is the reviewed commit",
+  listedInstalled.filter(r => r.updateAvailable)
+    .every(r => r.updateTo === r.reviewedCommit.slice(0, 7)))
 
 // ---------------------------------------------------------------- engagement
 
@@ -314,7 +336,8 @@ check("category counts sum to browse size",
 
 const counts = Model.countsOf(records)
 check("counts.installed matches", counts.installed === thirdParty.length)
-check("counts.updates matches", counts.updates === updates.available)
+check("counts.updates matches the per-record flags",
+  counts.updates === records.filter(r => r.updateAvailable).length)
 check("counts.builtin matches", counts.builtin === firstParty.length)
 
 // ---------------------------------------------------------------- perf
