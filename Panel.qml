@@ -99,6 +99,8 @@ Item {
     if (view !== "")
       root.showSettings = (view === "settings")
 
+    // The drawer is a narrow-window affordance; it should never be found
+    // already open on a fresh summon.
     root.sidebarOpen = false
     window.visible = true
     root.reload(false)
@@ -160,10 +162,7 @@ Item {
   property bool restoreOnLoad: false
   property bool scrollToSelected: false
   property bool showSettings: false
-  // The sidebar is never shown unless asked for, at any width. It opens as an
-  // inline column when there is room and as a drawer when there is not, but
-  // either way it starts closed on every open so the list is the first thing
-  // the panel shows.
+  // Only meaningful while the window is too narrow for the inline column.
   property bool sidebarOpen: false
 
   readonly property var selected: {
@@ -346,8 +345,7 @@ Item {
     root.category = root.category === name ? "" : name
     root.applyFilter()
     list.contentY = 0
-    if (!window.showSidebar)
-      root.sidebarOpen = false
+    root.sidebarOpen = false
   }
 
   function setScope(next) {
@@ -357,8 +355,7 @@ Item {
     root.category = ""
     root.applyFilter()
     list.contentY = 0
-    if (!window.showSidebar)
-      root.sidebarOpen = false
+    root.sidebarOpen = false
   }
 
   function selectIndex(i) {
@@ -738,8 +735,9 @@ Item {
           spacing: Style.spacing.controlGap
 
           Button {
-            // Always available: the sidebar is opt-in at every width.
-            visible: !root.showSettings
+            // Only when the inline column cannot fit. Opens the same switcher
+            // as a drawer over the list.
+            visible: !window.showSidebar && !root.showSettings
             iconText: "\u2630"
             tooltipText: "Views and categories"
             selected: root.sidebarOpen
@@ -841,8 +839,7 @@ Item {
           Sidebar {
             Layout.preferredWidth: Style.space(180)
             Layout.fillHeight: true
-            visible: root.sidebarOpen && window.showSidebar
-              && !window.detailTakesOver && !root.showSettings
+            visible: window.showSidebar && !window.detailTakesOver && !root.showSettings
             scopes: root.scopes
             categories: root.categories
             scope: root.scope
@@ -871,7 +868,7 @@ Item {
               Dropdown {
                 Layout.preferredWidth: Math.min(Style.space(190), window.width * 0.32)
                 Layout.alignment: Qt.AlignVCenter
-                visible: !(root.sidebarOpen && window.showSidebar)
+                visible: !window.showSidebar
                 showLabel: false
                 label: "View"
                 fontFamily: Style.font.family
@@ -889,7 +886,7 @@ Item {
                 // The scope dropdown next to this already shows the view and
                 // its count when the sidebar is hidden, so this would only
                 // repeat it into a row that has no space to spare.
-                visible: (root.sidebarOpen && window.showSidebar) || root.category !== ""
+                visible: window.showSidebar || root.category !== ""
                 text: root.rows.length + (root.rows.length === 1 ? " plugin" : " plugins")
                   + (root.category !== "" ? " in " + root.category : "")
                 color: Color.muted
