@@ -377,23 +377,34 @@ Item {
 
   function confirmAction() {
     var pending = root.pendingAction
-    root.pendingAction = null
     if (!pending)
       return
+
+    // Read the dialog's choice BEFORE dismissing it. `Confirm.action` is bound
+    // to pendingAction, so clearing it first collapses chosenSha to "" and the
+    // install is dropped on the floor with no error anywhere -- which is
+    // exactly the silent no-op this used to produce.
+    var chosen = confirmSheet.chosenSha
+    root.pendingAction = null
 
     var record = pending.record
     var args = []
     if (pending.verb === "install") {
       // The sha the dialog settled on: the reviewed commit, or the current head
       // if the user explicitly chose it after being told it is unreviewed.
-      var sha = confirmSheet.chosenSha
-      if (!sha)
+      var sha = chosen || record.reviewedCommit
+      if (!sha) {
+        root.loadError = "No reviewed commit is published for " + record.name
+          + ", so it cannot be installed safely."
         return
+      }
       args = ["install", record.repo, record.id, sha]
     } else if (pending.verb === "update") {
-      var target = confirmSheet.chosenSha || record.reviewedCommit
-      if (!target)
+      var target = chosen || record.reviewedCommit
+      if (!target) {
+        root.loadError = "No reviewed commit is published for " + record.name + "."
         return
+      }
       args = ["update", record.id, target]
     } else {
       args = [pending.verb, record.id]
@@ -866,9 +877,34 @@ Item {
             RowLayout {
               Layout.fillWidth: true
               spacing: Style.spacing.controlGap
-              visible: root.scope === "browse"
+
+              // The sidebar carries the scope switcher, but it needs 700px and
+              // the window is tiled at whatever Hyprland gives it — commonly
+              //621px, where the sidebar is hidden and every scope but Browse
+              // became unreachable. This is the same switcher in the space that
+              // is always on screen.
+              Dropdown {
+                Layout.preferredWidth: Math.min(Style.space(190), window.width * 0.32)
+                Layout.alignment: Qt.AlignVCenter
+                visible: !window.showSidebar
+                showLabel: false
+                label: "View"
+                fontFamily: Style.font.family
+                options: root.scopes.map(function (s) {
+                  return {
+                    value: s.key,
+                    label: s.count > 0 ? s.label + "  " + s.count : s.label
+                  }
+                })
+                value: root.scope
+                onChanged: function (v) { root.setScope(v) }
+              }
 
               Text {
+                // The scope dropdown next to this already shows the view and
+                // its count when the sidebar is hidden, so this would only
+                // repeat it into a row that has no space to spare.
+                visible: window.showSidebar || root.category !== ""
                 text: root.rows.length + (root.rows.length === 1 ? " plugin" : " plugins")
                   + (root.category !== "" ? " in " + root.category : "")
                 color: Color.muted
@@ -880,6 +916,7 @@ Item {
               }
 
               Button {
+                visible: root.scope === "browse" || root.scope === "all"
                 text: root.verifiedOnly ? "Verified only" : "All listings"
                 tooltipText: "The marketplace marks a listing verified once its source has been reviewed"
                 fontSize: Style.font.caption

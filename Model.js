@@ -77,7 +77,23 @@ function mergeState(catalog, local, updates, stats) {
 function buildRecord(cat, local, update, stat) {
   var installed = !!local
   var firstParty = installed ? !!local.firstParty : false
-  var behind = !!(update && update.behind)
+
+  // What counts as "an update is available" has to mean the same thing the
+  // Update button does. The button installs the commit the marketplace
+  // reviewed, so detection compares against that commit -- not against the
+  // repository's branch head, which may have moved well past it. Comparing
+  // against the head made an updated plugin sit in the Updates list forever,
+  // because the head is exactly what we deliberately do not install.
+  //
+  // Anything the marketplace does not list has no reviewed commit to compare
+  // with, so those fall back to the git check in bin/pm-updates.
+  var reviewedCommit = (cat && cat.reviewedCommit) || ""
+  var localHead = (local && local.git && local.git.head) || ""
+  var behind
+  if (installed && reviewedCommit && localHead)
+    behind = localHead !== reviewedCommit
+  else
+    behind = !!(update && update.behind)
 
   var kinds = installed && local.kinds && local.kinds.length
     ? local.kinds.slice()
@@ -119,7 +135,7 @@ function buildRecord(cat, local, update, stat) {
     shot: (cat && cat.shot) || "",
     // The commit the marketplace actually reviewed. Installs and updates pin to
     // this rather than to whatever the branch head has since become.
-    reviewedCommit: (cat && cat.reviewedCommit) || "",
+    reviewedCommit: reviewedCommit,
     observedCommit: (cat && cat.observedCommit) || "",
     license: (cat && cat.license) || "",
     installNote: (cat && cat.installNote) || "",
@@ -140,8 +156,9 @@ function buildRecord(cat, local, update, stat) {
     gitHead: (local && local.git && local.git.head) || "",
     gitDirty: !!(local && local.git && local.git.dirty),
     updateAvailable: behind,
-    updateFrom: update ? update.current : "",
-    updateTo: update ? update.remote : "",
+    updateFrom: localHead ? localHead.substring(0, 7) : (update ? update.current : ""),
+    // Where the Update button would actually take you.
+    updateTo: reviewedCommit ? reviewedCommit.substring(0, 7) : (update ? update.remote : ""),
     updateStatus: update ? update.status : "",
 
     // Precomputed once so filtering 2200 records per keystroke stays cheap.
