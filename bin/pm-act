@@ -17,6 +17,9 @@
 #   pm-act install <git-url> <plugin-id> <sha> [section]
 #   pm-act update <plugin-id> <sha>
 #   pm-act diff <plugin-id> [sha]       read-only preview of a pending update
+#   pm-act bar-move <id> <section> [index]
+#   pm-act bar-put <id> <section> [index]
+#   pm-act bar-remove <id>              takes it off the bar by disabling it
 #   pm-act remove <plugin-id>
 #   pm-act enable <plugin-id> [section]
 #   pm-act disable <plugin-id>
@@ -47,6 +50,17 @@ abort() {
 
 valid_id() {
   [[ ${1:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${1:-} != *..* ]]
+}
+
+valid_section() {
+  case "${1:-}" in
+  left | center | right) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+valid_index() {
+  [[ ${1:-} =~ ^[0-9]{1,3}$ ]]
 }
 
 # A full 40-character object name. Nothing shorter is accepted: an abbreviated
@@ -306,15 +320,78 @@ disable)
 # they do not rescan: the shell picks up a shell.json change on its own, and a
 # rescan would needlessly destroy every open panel.
 bar-move)
+  # Relocate a widget already on the bar. Section and index are both validated
+  # here rather than passed through, so this verb cannot be talked into writing
+  # an arbitrary placement.
   id="${1:-}"
   section="${2:-}"
+  index="${3:-}"
   valid_id "$id" || abort "Refusing to act on an invalid plugin id."
-  case "$section" in
-  left | center | right) ;;
-  *) abort "Section must be left, center or right." ;;
-  esac
-  omarchy bar move "$id" --section "$section" 2>&1
+  valid_section "$section" || abort "Section must be left, center or right."
+  if [[ -n $index ]]; then
+    valid_index "$index" || abort "Index must be a whole number from 0 to 999."
+    omarchy bar move "$id" --section "$section" --index "$index" 2>&1
+  else
+    omarchy bar move "$id" --section "$section" 2>&1
+  fi
   done_with $?
+  ;;
+
+bar-put)
+  # Place a widget that is installed but not currently on the bar.
+  id="${1:-}"
+  section="${2:-}"
+  index="${3:-}"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  valid_section "$section" || abort "Section must be left, center or right."
+  if [[ -n $index ]]; then
+    valid_index "$index" || abort "Index must be a whole number from 0 to 999."
+    omarchy bar put "$id" --section "$section" --index "$index" 2>&1
+  else
+    omarchy bar put "$id" --section "$section" 2>&1
+  fi
+  done_with $?
+  ;;
+
+bar-remove)
+  # Taking a widget off the bar means deleting its layout entry, and the shell
+  # has no separate IPC for that -- disabling the plugin is what removes it.
+  # For a widget-only plugin that is exactly "remove from the bar". For a plugin
+  # that also owns a panel it stops the panel being summonable too, which is why
+  # the panel warns before calling this.
+  id="${1:-}"
+  valid_id "$id" || abort "Refusing to act on an invalid plugin id."
+  echo "→ omarchy plugin disable $id  (removes its bar entry)"
+  echo
+  omarchy plugin disable "$id" 2>&1
+  done_with $?
+  ;;
+
+bar-restore)
+  # Put the bar back the way it was when the editor opened. The arrangement
+  # comes from a snapshot this plugin wrote itself, never from an argument, so
+  # there is no untrusted layout crossing the boundary -- and every id and
+  # section out of it is still validated before it is used.
+  snapshot="${XDG_RUNTIME_DIR:-/tmp}/io.github.omarcodehub.plugin-manager/bar-snapshot.json"
+  [[ -s $snapshot ]] || abort "There is no saved arrangement to go back to."
+  jq -e '(.sections | type) == "array"' "$snapshot" >/dev/null 2>&1 ||
+    abort "The saved arrangement could not be read."
+
+  echo "→ restoring the bar as it was"
+  echo
+  rc=0
+  while IFS=$'\t' read -r sec idx wid; do
+    [[ -n $wid ]] || continue
+    valid_id "$wid" || { echo "skipping invalid id" >&2; continue; }
+    valid_section "$sec" || { echo "skipping invalid section" >&2; continue; }
+    valid_index "$idx" || { echo "skipping invalid index" >&2; continue; }
+    omarchy bar move "$wid" --section "$sec" --index "$idx" >/dev/null 2>&1 || rc=1
+    sleep 0.15
+  done < <(jq -r '.sections[] | .section as $s | .widgets | to_entries[]
+                  | "\($s)\t\(.key)\t\(.value)"' "$snapshot")
+
+  echo "restored"
+  done_with $rc
   ;;
 
 bar-set)

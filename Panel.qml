@@ -96,8 +96,11 @@ Item {
     // `{"view":"settings"}` opens straight into Settings, so the Omarchy menu
     // or a keybinding can go there directly.
     var view = String(payload.view || "")
-    if (view !== "")
+    if (view !== "") {
       root.showSettings = (view === "settings")
+      if (view === "bar")
+        root.setScope("bar")
+    }
 
     // The drawer is a narrow-window affordance; it should never be found
     // already open on a fresh summon.
@@ -106,7 +109,7 @@ Item {
     root.reload(false)
     Qt.callLater(function () {
       if (!root.restoreOnLoad)
-        searchField.forceActiveFocus()
+        root.focusForView()
     })
   }
 
@@ -189,7 +192,8 @@ Item {
     { key: "updates", label: "Updates", count: root.counts.updates },
     { key: "enabled", label: "Enabled", count: root.counts.enabled },
     { key: "builtin", label: "Built-in", count: root.counts.builtin },
-    { key: "all", label: "Everything", count: root.records.length }
+    { key: "all", label: "Everything", count: root.records.length },
+    { key: "bar", label: "Bar layout", count: 0 }
   ]
 
   readonly property var categories: root.records.length
@@ -270,6 +274,89 @@ Item {
     previewProc.running = true
   }
 
+  // ─────────────────────────────────────────────── bar layout
+  property var barState: null
+  property bool loadingBar: false
+  property bool barBusy: false
+  property string barError: ""
+
+  property bool barSnapshotTaken: false
+
+  function reloadBar() {
+    if (root.binDir === "")
+      return
+    root.loadingBar = true
+    // The first read of the session also records the arrangement, so Undo
+    // means "the bar as I found it" however many moves have happened since.
+    barProc.snapshot = !root.barSnapshotTaken
+    root.barSnapshotTaken = true
+    barProc.running = true
+  }
+
+  // Bar edits are applied one at a time and the layout is read back after each
+  // one, because the shell rewrites shell.json itself and the result of a move
+  // is its business, not something to be predicted here.
+  function runBarAction(args) {
+    if (root.binDir === "" || root.barBusy)
+      return
+    root.barError = ""
+    root.barBusy = true
+    barActionProc.pending = args
+    barActionProc.running = true
+  }
+
+  Process {
+    id: barProc
+    property bool snapshot: false
+    command: root.binDir === "" ? []
+      : (snapshot ? [root.binDir + "/pm-bar", "--snapshot"] : [root.binDir + "/pm-bar"])
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.loadingBar = false
+        try {
+          root.barState = JSON.parse(text || "null")
+        } catch (e) {
+          root.barState = null
+        }
+      }
+    }
+    onExited: root.loadingBar = false
+  }
+
+  Process {
+    id: barActionProc
+    property var pending: []
+    command: root.binDir === "" || pending.length === 0
+      ? [] : [root.binDir + "/pm-act"].concat(pending)
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var msg = String(text || "").trim()
+        if (msg !== "")
+          root.barError = msg
+      }
+    }
+    onExited: function (exitCode) {
+      if (exitCode !== 0 && root.barError === "")
+        root.barError = "That change could not be applied (exit " + exitCode + ")."
+      barActionProc.pending = []
+      root.barBusy = false
+      barReloadDelay.restart()
+    }
+  }
+
+  Timer {
+    id: barReloadDelay
+    interval: 350
+    onTriggered: {
+      root.reloadBar()
+      // A widget coming off the bar changes what is installed and enabled, so
+      // the plugin list has to catch up too.
+      root.refreshLocal()
+    }
+  }
+
   // ─────────────────────────────────────────────── job state
   property string jobId: ""
   property var job: null
@@ -284,6 +371,7 @@ Item {
     root.loadError = ""
     root.loadingCatalog = true
     catalogProc.forceRefresh = force === true
+    root.forceUpdateCheck = force === true
     catalogProc.running = true
     root.loadingStats = true
     statsProc.forceRefresh = force === true
@@ -301,6 +389,11 @@ Item {
     root.checkingUpdates = true
     updatesProc.running = true
   }
+
+  // Pressing refresh means "ask upstream again", so the cached update check is
+  // bypassed. Merely opening the panel is not a reason to hit the network once
+  // per installed plugin.
+  property bool forceUpdateCheck: false
 
   function rebuild() {
     root.records = Model.mergeState(root.catalog, root.localState, root.updateState, root.statsState)
@@ -348,7 +441,49 @@ Item {
     root.sidebarOpen = false
   }
 
+  readonly property bool barView: root.scope === "bar"
+
+  // Walk the scope list without reaching for the sidebar.
+  function stepScope(direction) {
+    var keys = []
+    for (var i = 0; i < root.scopes.length; i++)
+      keys.push(root.scopes[i].key)
+    var at = keys.indexOf(root.scope)
+    if (at < 0)
+      at = 0
+    var next = at + (direction > 0 ? 1 : -1)
+    if (next < 0 || next >= keys.length)
+      return
+    root.setScope(keys[next])
+  }
+
+  // Where the keyboard should be pointing depends on what is on screen.
+  //
+  // The list is a search-first view, so the field takes focus and typing
+  // filters, which is how the rest of Omarchy behaves. That also means bare
+  // letters cannot be shortcuts there: PanelKeyCatcher is blocked while the
+  // field has focus, so a letter types rather than acting. Global actions are
+  // on Ctrl chords, which work either way.
+  //
+  // The bar view has nothing to type into, so focus goes to the content and
+  // the bare keys hjkl, HJKL and x drive it.
+  function focusForView() {
+    if (root.barView || root.showSettings)
+      content.forceActiveFocus()
+    else
+      searchField.forceActiveFocus()
+  }
+
+  onBarViewChanged: Qt.callLater(root.focusForView)
+  onShowSettingsChanged: Qt.callLater(root.focusForView)
+
   function setScope(next) {
+    // Settings is an overlay over the views, not one of them, so arriving
+    // anywhere leaves it. Without this a destination chord pressed from
+    // settings changed the view behind the overlay and looked like a dead key.
+    root.showSettings = false
+    if (next === "bar" && root.barState === null)
+      root.reloadBar()
     if (root.scope === next)
       return
     root.scope = next
@@ -366,10 +501,24 @@ Item {
     list.positionViewAtIndex(i, ListView.Contain)
   }
 
+  // The one action the selected row is actually offering, or "" when it offers
+  // none. Ctrl+Enter runs it, which is what finally makes install and update
+  // reachable without the mouse. It still opens the confirmation, so the
+  // modifier buys a step, never the commitment.
+  function primaryVerb(r) {
+    if (!r)
+      return ""
+    if (!r.installed)
+      return r.installable ? "install" : ""
+    return r.updateAvailable ? "update" : ""
+  }
+
   function moveSelection(delta) {
     if (root.rows.length === 0)
       return
-    var i = list.currentIndex + delta
+    // Starting from -1 means the first press lands on the first row rather
+    // than on nothing.
+    var i = (list.currentIndex < 0 ? (delta > 0 ? -1 : 0) : list.currentIndex) + delta
     if (i < 0)
       i = 0
     if (i >= root.rows.length)
@@ -382,6 +531,75 @@ Item {
   // Nothing from the marketplace feed is ever executed. The catalog ships an
   // `installCommand` string and it is deliberately ignored: only the verb and
   // the repository URL cross into bin/pm-act, which rebuilds the argv itself.
+  // Taking a widget off the bar deletes its layout entry, and that entry is
+  // also what marks a plugin enabled. For a widget-only plugin that is simply
+  // "remove from the bar". For one that also owns a panel it stops the panel
+  // being summonable, so that case asks first.
+  function confirmBarRemoval(id) {
+    var widget = null
+    if (root.barState && root.barState.sections) {
+      for (var i = 0; i < root.barState.sections.length; i++) {
+        var list = root.barState.sections[i].widgets
+        for (var j = 0; j < list.length; j++)
+          if (list[j].id === id)
+            widget = list[j]
+      }
+    }
+    if (!widget)
+      return
+    if (!widget.alsoDisablesPanel) {
+      root.runBarAction(["bar-remove", id])
+      return
+    }
+    root.pendingAction = {
+      verb: "bar-remove",
+      record: {
+        id: id,
+        name: widget.name,
+        reviewedCommit: "",
+        repo: "",
+        verified: false,
+        kinds: widget.kinds
+      }
+    }
+  }
+
+  // One place that decides what Esc means, so the key catcher, the search
+  // field and the header button cannot disagree about it.
+  // One ladder, climbed the same way from every view: leave whatever is
+  // covering the list, innermost first, and close the window only when nothing
+  // is. Escape used to skip the bar editor entirely, so the same key that
+  // stepped out of settings closed the whole app from the bar.
+  function dismiss() {
+    if (root.pendingAction)
+      root.pendingAction = null
+    else if (root.sidebarOpen)
+      root.sidebarOpen = false
+    else if (root.showSettings)
+      root.showSettings = false
+    else if (window.detailTakesOver)
+      root.selectedId = ""
+    else if (root.barView)
+      root.setScope("browse")
+    else
+      root.requestClose()
+  }
+
+  // Single-key shortcuts. Deliberately none of them change the system: the
+  // destructive verbs stay behind a button and a confirmation, because a
+  // stray keypress must never install or remove anything.
+  function handleTextKey(t) {
+    // Only reached when the search field does not have focus, which in practice
+    // means the bar view. Everything global lives on a Ctrl chord instead, so
+    // it keeps working while you are typing a search.
+    if (!root.barView)
+      return
+    if (t === "H") barEditor.shiftSelected(-1, 0)
+    else if (t === "L") barEditor.shiftSelected(1, 0)
+    else if (t === "K") barEditor.shiftSelected(0, -1)
+    else if (t === "J") barEditor.shiftSelected(0, 1)
+  }
+
   function requestAction(verb, record) {
     if (root.jobRunning)
       return
@@ -419,6 +637,11 @@ Item {
         return
       }
       args = ["update", record.id, target]
+    } else if (pending.verb === "bar-remove") {
+      // Not a plugin install, so it does not go through the detached job
+      // runner: nothing here destroys the panel mid-flight.
+      root.runBarAction(["bar-remove", record.id])
+      return
     } else {
       args = [pending.verb, record.id]
     }
@@ -573,7 +796,9 @@ Item {
 
   Process {
     id: updatesProc
-    command: root.binDir === "" ? [] : [root.binDir + "/pm-updates"]
+    command: root.binDir === "" ? []
+      : (root.forceUpdateCheck ? [root.binDir + "/pm-updates", "--refresh"]
+                               : [root.binDir + "/pm-updates"])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -677,43 +902,129 @@ Item {
     readonly property bool showSidebar: width >= 700
     readonly property bool detailTakesOver: !wide && root.selectedId !== ""
 
+    // Omarchy is keyboard-first, so the panel is too. PanelKeyCatcher is the
+    // shell's own dispatcher: it takes keys before descendants (Keys.priority
+    // BeforeItem), which is what lets arrows drive a cursor instead of being
+    // eaten by the list's own scrolling. `blocked` hands keys back to the
+    // search field while it has focus, so typing still types.
+    //
+    // The rule every binding below follows: a key means the same thing in
+    // every view. Earlier it did not, and the footer had to label the same
+    // chord two different ways depending on where you stood.
+    //
+    //   arrows, hjkl   move the cursor inside this view, never between views
+    //   enter          activate what the cursor is on
+    //   ctrl+enter     run the action that item offers, if it offers one
+    //   tab, shift+tab next and previous view, from every view
+    //   ctrl+b u i ,   destinations: always the same place, never a toggle
+    //   ctrl+g         show or hide the sidebar, which is a panel not a place
+    //   esc            leave whatever is covering the list, innermost first,
+    //                  and close the window only when nothing is
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      blocked: searchField.activeFocus || root.pendingAction !== null
+
+      // No Keys.onPressed here. PanelKeyCatcher declares that handler on its
+      // own root, and declaring it again at the use site REPLACES it, killing
+      // every signal below. Modifiers are not available through those signals,
+      // so a widget is moved with uppercase HJKL, which arrives as textKey.
+
+      onMoveRequested: function (dx, dy) {
+        if (root.showSettings)
+          return
+        if (root.barView) {
+          barEditor.moveCursor(dx, dy)
+          return
+        }
+        // Left and right walk the sidebar's scopes when it is on screen, so the
+        // whole app is reachable without touching the list.
+        // Arrows move the cursor inside the current view and never between
+        // views, which is what Tab is for. Left is the one spatial exception:
+        // on a narrow window the detail has replaced the list, so left walks
+        // back out of it to where the list was.
+        if (dx < 0 && window.detailTakesOver) {
+          root.selectedId = ""
+          return
+        }
+        if (dy !== 0)
+          root.moveSelection(dy)
+      }
+      onActivateRequested: {
+        if (root.barView) {
+          barEditor.activateCursor()
+          return
+        }
+        // Enter on a row is "show me this", never "install this". An action
+        // that changes the system stays behind its own button and dialog.
+        if (root.rows.length > 0 && list.currentIndex >= 0)
+          root.selectedId = root.rows[list.currentIndex].id
+      }
+      onTabRequested: function (direction) { root.stepScope(direction) }
+      onDeleteRequested: {
+        if (root.barView)
+          barEditor.removeCursorWidget()
+      }
+      onCloseRequested: root.dismiss()
+      onTextKey: function (t) { root.handleTextKey(t) }
+
+    // Ctrl chords rather than bare letters. A Shortcut fires regardless of
+    // which item has focus, so these keep working while a search is being
+    // typed -- which bare letters cannot, because the text field swallows them.
+    // Destinations, never toggles. Ctrl+B used to mean "bar" from the list and
+    // "back" from the bar, so one key had two meanings depending on where it
+    // was pressed, and the hint footer had to label it two different ways.
+    // Each of these now lands in the same place from everywhere, and Escape is
+    // the only key that goes back.
+    Shortcut { sequences: ["Ctrl+B"]; onActivated: root.setScope("bar") }
+    Shortcut { sequences: ["Ctrl+G"]; onActivated: root.sidebarOpen = !root.sidebarOpen }
+    Shortcut { sequences: ["Ctrl+U"]; onActivated: root.setScope("updates") }
+    Shortcut { sequences: ["Ctrl+I"]; onActivated: root.setScope("installed") }
+    Shortcut { sequences: ["Ctrl+,"]; onActivated: root.showSettings = true }
+    Shortcut {
+      sequences: ["Ctrl+Return", "Ctrl+Enter"]
+      enabled: !root.barView && !root.showSettings && root.pendingAction === null
+      onActivated: {
+        var verb = root.primaryVerb(root.selected)
+        if (verb !== "")
+          root.requestAction(verb, root.selected)
+      }
+    }
+    Shortcut {
+      sequences: ["Ctrl+R", "F5"]
+      onActivated: {
+        root.reload(true)
+        if (root.barView)
+          root.reloadBar()
+      }
+    }
+    Shortcut {
+      sequences: ["Ctrl+F", "Ctrl+L"]
+      onActivated: {
+        if (root.barView)
+          root.setScope("browse")
+        searchField.forceActiveFocus()
+        searchField.selectAll()
+      }
+    }
+
     Item {
       id: content
       anchors.fill: parent
       focus: true
 
+      // Only what PanelKeyCatcher does not already cover. Esc, the arrows,
+      // Enter, Space, x and every plain letter arrive through its signals, so
+      // handling them again here would fire them twice.
       Keys.onPressed: function (event) {
-        if (event.key === Qt.Key_Escape) {
-          // Unwind one layer at a time: dialog, then the detail that replaced
-          // the list on a narrow window, then the panel itself.
-          if (root.pendingAction) {
-            root.pendingAction = null
-          } else if (root.sidebarOpen) {
-            root.sidebarOpen = false
-          } else if (root.showSettings) {
-            root.showSettings = false
-          } else if (window.detailTakesOver) {
-            root.selectedId = ""
-          } else {
-            root.requestClose()
-          }
-          event.accepted = true
-        } else if (event.key === Qt.Key_F5
-                   || (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier))) {
+        if (event.key === Qt.Key_F5
+            || (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier))) {
           root.reload(true)
+          if (root.barView)
+            root.reloadBar()
           event.accepted = true
         } else if (event.key === Qt.Key_F11) {
           window.fullscreen = !window.fullscreen
-          event.accepted = true
-        } else if (event.key === Qt.Key_Slash && !searchField.activeFocus) {
-          searchField.forceActiveFocus()
-          searchField.selectAll()
-          event.accepted = true
-        } else if (event.key === Qt.Key_Down) {
-          root.moveSelection(1)
-          event.accepted = true
-        } else if (event.key === Qt.Key_Up) {
-          root.moveSelection(-1)
           event.accepted = true
         } else if (event.key === Qt.Key_PageDown) {
           root.moveSelection(10)
@@ -758,7 +1069,13 @@ Item {
             Layout.fillWidth: true
             elide: Text.ElideRight
             textFormat: Text.PlainText
-            visible: window.width >= 700
+            // The rest of this row is fixed width: the title, a 320px search
+            // field and two buttons. At the width Hyprland hands this panel
+            // there is no slack left at all, so this text elided to "312..."
+            // and read as a rendering fault. It appears only where it fits,
+            // and none of what it says is unavailable elsewhere: the counts
+            // are in the sidebar and a load error also fills the detail pane.
+            visible: window.width >= 980 && text !== ""
             color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -768,10 +1085,8 @@ Item {
               if (root.busy)
                 return "Loading..."
               var bits = []
-              bits.push(root.counts.browse + " listed")
-              bits.push(root.counts.installed + " installed")
               if (root.counts.updates > 0)
-                bits.push(root.counts.updates + " update" + (root.counts.updates === 1 ? "" : "s"))
+                bits.push(root.counts.updates + " update" + (root.counts.updates === 1 ? "" : "s") + " available")
               if (root.catalog && root.catalog.stale)
                 bits.push("offline copy")
               return bits.join("  ·  ")
@@ -796,17 +1111,23 @@ Item {
                 root.selectedId = ""
               root.applyFilter()
             }
-            Keys.onDownPressed: {
-              content.forceActiveFocus()
-              root.moveSelection(1)
+            // The field keeps focus so typing continues to filter; only the
+            // selection moves. That is what a search box over a list should do.
+            Keys.onDownPressed: root.moveSelection(1)
+            Keys.onUpPressed: root.moveSelection(-1)
+            Keys.onReturnPressed: {
+              if (root.rows.length > 0 && list.currentIndex >= 0)
+                root.selectedId = root.rows[list.currentIndex].id
             }
             Keys.onEscapePressed: {
-              if (text !== "")
+              // Clearing a search is the first thing Esc does while typing;
+              // beyond that it unwinds like everywhere else.
+              if (text !== "") {
                 text = ""
-              else if (window.detailTakesOver)
-                root.selectedId = ""
-              else
-                root.requestClose()
+              } else {
+                content.forceActiveFocus()
+                root.dismiss()
+              }
             }
           }
 
@@ -854,11 +1175,12 @@ Item {
             Layout.fillHeight: true
             Layout.minimumWidth: Style.space(260)
             spacing: Style.spacing.sm
-            visible: !window.detailTakesOver && !root.showSettings
+            visible: !window.detailTakesOver && !root.showSettings && !root.barView
 
             RowLayout {
               Layout.fillWidth: true
               spacing: Style.spacing.controlGap
+              visible: !root.barView
 
               // The sidebar carries the scope switcher, but it needs 700px and
               // the window is tiled at whatever Hyprland gives it — commonly
@@ -987,7 +1309,7 @@ Item {
             Layout.preferredWidth: window.detailTakesOver
               ? -1 : Math.min(Style.space(400), window.width * 0.38)
             Layout.fillHeight: true
-            visible: (window.wide || window.detailTakesOver) && !root.showSettings
+            visible: (window.wide || window.detailTakesOver) && !root.showSettings && !root.barView
             record: root.selected
             jobRunning: root.jobRunning
             previewFile: root.previewSource(root.selected ? root.selected.shot : "", root.previewRevision)
@@ -995,6 +1317,25 @@ Item {
             showBack: window.detailTakesOver
             onBack: root.selectedId = ""
             onAct: function (verb) { root.requestAction(verb, root.selected) }
+          }
+
+          BarLayout {
+            id: barEditor
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: root.barView && !root.showSettings
+            barData: root.barState
+            busy: root.barBusy
+            onMoveWidget: function (id, section, index) {
+              root.runBarAction(["bar-move", id, section, String(index)])
+            }
+            onPutWidget: function (id, section, index) {
+              root.runBarAction(["bar-put", id, section, String(index)])
+            }
+            onRemoveWidget: function (id) { root.confirmBarRemoval(id) }
+            onRevertLayout: root.runBarAction(["bar-restore"])
+            // Keep the cursor on something real when the view first opens.
+            onBarDataChanged: if (barEditor.selectedId === "") barEditor.moveCursor(0, 0)
           }
 
           // Settings replaces the whole body rather than sitting beside it:
@@ -1006,6 +1347,32 @@ Item {
             visible: root.showSettings
             binDir: root.binDir
             pluginId: root.pluginId
+          }
+        }
+
+        // ───────────────────────────────── key hints
+        Text {
+          Layout.fillWidth: true
+          // Wrapped, not elided: a truncated list of shortcuts is worse than
+          // one that takes two lines, and at a tiled width it always truncated.
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+          maximumLineCount: 3
+          color: Util.alpha(Color.foreground, 0.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          // Only the keys that do something here, and the action key only when
+          // the selected row is actually offering one. A hint for a key that
+          // does nothing is what made the old footer read as broken.
+          text: {
+            if (root.barView)
+              return "hjkl or arrows move the cursor   HJKL move the widget   enter place   x remove   tab change view   ctrl+r refresh   esc back"
+            if (root.showSettings)
+              return "tab change view   esc back"
+            var verb = root.primaryVerb(root.selected)
+            return "type to search   \u2191\u2193 select   enter open"
+              + (verb === "" ? "" : "   ctrl+enter " + verb)
+              + "   tab change view   ctrl+b bar   ctrl+u updates   ctrl+i installed   ctrl+g sidebar   ctrl+, settings   ctrl+r refresh   esc close"
           }
         }
 
@@ -1074,6 +1441,7 @@ Item {
         onConfirmed: root.confirmAction()
         onCancelled: root.pendingAction = null
       }
+    }
     }
   }
 }

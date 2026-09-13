@@ -6,8 +6,9 @@ body:
     attributes:
       value: |
         Please do not report a **security** problem here. If you have found a way
-        to make this plugin run something the user did not approve — a URL that
-        escapes validation, a feed value that reaches a shell — email the
+        to make this plugin run something the user did not approve, such as a
+        URL that escapes validation or a feed value that reaches a shell, email
+        the
         maintainer instead of opening a public issue.
 
   - type: textarea

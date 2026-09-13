@@ -2,8 +2,9 @@
   "schemaVersion": 1,
   "id": "io.github.omarcodehub.plugin-manager",
   "name": "Plugin Depot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "OmarCodeHub",
+  "license": "MIT",
   "description": "Browse the Omarchy marketplace and install, update, enable, disable or remove shell plugins from one panel",
   "kinds": [
     "panel",

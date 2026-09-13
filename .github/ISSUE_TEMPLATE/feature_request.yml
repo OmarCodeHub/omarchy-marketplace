@@ -15,7 +15,7 @@ body:
     id: idea
     attributes:
       label: What you think would help
-      description: Optional. A rough shape is fine; the problem above matters more.
+      description: Optional. A rough shape is fine. The problem above matters more.
 
   - type: dropdown
     id: area
