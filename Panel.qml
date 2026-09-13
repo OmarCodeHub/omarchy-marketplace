@@ -280,10 +280,16 @@ Item {
   property bool barBusy: false
   property string barError: ""
 
+  property bool barSnapshotTaken: false
+
   function reloadBar() {
     if (root.binDir === "")
       return
     root.loadingBar = true
+    // The first read of the session also records the arrangement, so Undo
+    // means "the bar as I found it" however many moves have happened since.
+    barProc.snapshot = !root.barSnapshotTaken
+    root.barSnapshotTaken = true
     barProc.running = true
   }
 
@@ -301,7 +307,9 @@ Item {
 
   Process {
     id: barProc
-    command: root.binDir === "" ? [] : [root.binDir + "/pm-bar"]
+    property bool snapshot: false
+    command: root.binDir === "" ? []
+      : (snapshot ? [root.binDir + "/pm-bar", "--snapshot"] : [root.binDir + "/pm-bar"])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -429,6 +437,20 @@ Item {
 
   readonly property bool barView: root.scope === "bar"
 
+  // Walk the scope list without reaching for the sidebar.
+  function stepScope(direction) {
+    var keys = []
+    for (var i = 0; i < root.scopes.length; i++)
+      keys.push(root.scopes[i].key)
+    var at = keys.indexOf(root.scope)
+    if (at < 0)
+      at = 0
+    var next = at + (direction > 0 ? 1 : -1)
+    if (next < 0 || next >= keys.length)
+      return
+    root.setScope(keys[next])
+  }
+
   function setScope(next) {
     if (next === "bar" && root.barState === null)
       root.reloadBar()
@@ -452,7 +474,9 @@ Item {
   function moveSelection(delta) {
     if (root.rows.length === 0)
       return
-    var i = list.currentIndex + delta
+    // Starting from -1 means the first press lands on the first row rather
+    // than on nothing.
+    var i = (list.currentIndex < 0 ? (delta > 0 ? -1 : 0) : list.currentIndex) + delta
     if (i < 0)
       i = 0
     if (i >= root.rows.length)
@@ -517,6 +541,15 @@ Item {
   // destructive verbs stay behind a button and a confirmation, because a
   // stray keypress must never install or remove anything.
   function handleTextKey(t) {
+    // Uppercase HJKL moves the thing under the cursor. Lowercase and the arrows
+    // move the cursor itself, which PanelKeyCatcher handles for us.
+    if (root.barView && (t === "H" || t === "J" || t === "K" || t === "L")) {
+      if (t === "H") barEditor.shiftSelected(-1, 0)
+      else if (t === "L") barEditor.shiftSelected(1, 0)
+      else if (t === "K") barEditor.shiftSelected(0, -1)
+      else if (t === "J") barEditor.shiftSelected(0, 1)
+      return
+    }
     if (t === "/") {
       searchField.forceActiveFocus()
       searchField.selectAll()
@@ -847,20 +880,26 @@ Item {
       anchors.fill: parent
       blocked: searchField.activeFocus || root.pendingAction !== null
 
-      Keys.onPressed: function (event) {
-        // Shift with an arrow moves the widget itself. Handled before the
-        // catcher's own move signal so the two cannot both act on one press.
-        if (root.barView && (event.modifiers & Qt.ShiftModifier)) {
-          if (event.key === Qt.Key_Left) { barEditor.shiftSelected(-1, 0); event.accepted = true }
-          else if (event.key === Qt.Key_Right) { barEditor.shiftSelected(1, 0); event.accepted = true }
-          else if (event.key === Qt.Key_Up) { barEditor.shiftSelected(0, -1); event.accepted = true }
-          else if (event.key === Qt.Key_Down) { barEditor.shiftSelected(0, 1); event.accepted = true }
-        }
-      }
+      // No Keys.onPressed here. PanelKeyCatcher declares that handler on its
+      // own root, and declaring it again at the use site REPLACES it, killing
+      // every signal below. Modifiers are not available through those signals,
+      // so a widget is moved with uppercase HJKL, which arrives as textKey.
 
       onMoveRequested: function (dx, dy) {
+        if (root.showSettings)
+          return
         if (root.barView) {
           barEditor.moveCursor(dx, dy)
+          return
+        }
+        // Left and right walk the sidebar's scopes when it is on screen, so the
+        // whole app is reachable without touching the list.
+        if (dx !== 0) {
+          if (window.detailTakesOver && dx < 0) {
+            root.selectedId = ""
+            return
+          }
+          root.stepScope(dx)
           return
         }
         if (dy !== 0)
@@ -876,6 +915,10 @@ Item {
         if (root.rows.length > 0 && list.currentIndex >= 0)
           root.selectedId = root.rows[list.currentIndex].id
       }
+      onTabRequested: function (direction) {
+        if (!root.barView && !root.showSettings)
+          root.stepScope(direction)
+      }
       onDeleteRequested: {
         if (root.barView)
           barEditor.removeCursorWidget()
@@ -888,26 +931,18 @@ Item {
       anchors.fill: parent
       focus: true
 
+      // Only what PanelKeyCatcher does not already cover. Esc, the arrows,
+      // Enter, Space, x and every plain letter arrive through its signals, so
+      // handling them again here would fire them twice.
       Keys.onPressed: function (event) {
-        if (event.key === Qt.Key_Escape) {
-          root.dismiss()
-          event.accepted = true
-        } else if (event.key === Qt.Key_F5
-                   || (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier))) {
+        if (event.key === Qt.Key_F5
+            || (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier))) {
           root.reload(true)
+          if (root.barView)
+            root.reloadBar()
           event.accepted = true
         } else if (event.key === Qt.Key_F11) {
           window.fullscreen = !window.fullscreen
-          event.accepted = true
-        } else if (event.key === Qt.Key_Slash && !searchField.activeFocus) {
-          searchField.forceActiveFocus()
-          searchField.selectAll()
-          event.accepted = true
-        } else if (event.key === Qt.Key_Down) {
-          root.moveSelection(1)
-          event.accepted = true
-        } else if (event.key === Qt.Key_Up) {
-          root.moveSelection(-1)
           event.accepted = true
         } else if (event.key === Qt.Key_PageDown) {
           root.moveSelection(10)
@@ -1208,6 +1243,9 @@ Item {
               root.runBarAction(["bar-put", id, section, String(index)])
             }
             onRemoveWidget: function (id) { root.confirmBarRemoval(id) }
+            onRevertLayout: root.runBarAction(["bar-restore"])
+            // Keep the cursor on something real when the view first opens.
+            onBarDataChanged: if (barEditor.selectedId === "") barEditor.moveCursor(0, 0)
           }
 
           // Settings replaces the whole body rather than sitting beside it:
@@ -1232,10 +1270,10 @@ Item {
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
           text: root.barView
-            ? "\u2191\u2193\u2190\u2192 move cursor   shift+\u2191\u2193\u2190\u2192 move widget   del remove   b back   r refresh   esc close"
+            ? "\u2191\u2193\u2190\u2192 / hjkl move cursor   HJKL move the widget   x remove   enter place   b back   r refresh   esc close"
             : root.showSettings
               ? "s close settings   esc back"
-              : "\u2191\u2193 select   / search   g views   b bar layout   u updates   i installed   s settings   r refresh   esc close"
+              : "\u2191\u2193 select   \u2190\u2192 / tab change view   / search   g sidebar   b bar   u updates   i installed   s settings   r refresh   esc close"
         }
 
         // ───────────────────────────────── job strip

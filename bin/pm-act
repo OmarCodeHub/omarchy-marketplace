@@ -367,6 +367,33 @@ bar-remove)
   done_with $?
   ;;
 
+bar-restore)
+  # Put the bar back the way it was when the editor opened. The arrangement
+  # comes from a snapshot this plugin wrote itself, never from an argument, so
+  # there is no untrusted layout crossing the boundary -- and every id and
+  # section out of it is still validated before it is used.
+  snapshot="${XDG_RUNTIME_DIR:-/tmp}/io.github.omarcodehub.plugin-manager/bar-snapshot.json"
+  [[ -s $snapshot ]] || abort "There is no saved arrangement to go back to."
+  jq -e '(.sections | type) == "array"' "$snapshot" >/dev/null 2>&1 ||
+    abort "The saved arrangement could not be read."
+
+  echo "→ restoring the bar as it was"
+  echo
+  rc=0
+  while IFS=$'\t' read -r sec idx wid; do
+    [[ -n $wid ]] || continue
+    valid_id "$wid" || { echo "skipping invalid id" >&2; continue; }
+    valid_section "$sec" || { echo "skipping invalid section" >&2; continue; }
+    valid_index "$idx" || { echo "skipping invalid index" >&2; continue; }
+    omarchy bar move "$wid" --section "$sec" --index "$idx" >/dev/null 2>&1 || rc=1
+    sleep 0.15
+  done < <(jq -r '.sections[] | .section as $s | .widgets | to_entries[]
+                  | "\($s)\t\(.key)\t\(.value)"' "$snapshot")
+
+  echo "restored"
+  done_with $rc
+  ;;
+
 bar-set)
   id="${1:-}"
   key="${2:-}"

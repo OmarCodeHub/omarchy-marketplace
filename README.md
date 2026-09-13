@@ -23,8 +23,10 @@ marketplace, install, update, enable, disable and remove — without a terminal.
 - **Arrange the bar.** Omarchy can move and place bar widgets from the command
   line but shows the arrangement nowhere. The Bar layout view draws the three
   sections the way the bar is laid out, left to right, with every placed widget
-  in order and everything installed but unplaced below. Move a widget between
-  sections or reorder it within one, entirely from the keyboard.
+  in order and everything installed but unplaced below. Drag a widget where you
+  want it, or move the cursor with the arrows and press uppercase H, J, K or L
+  to move the widget itself. **Undo my changes** puts the bar back the way it
+  was when the view opened.
 - **Keyboard first**, like the rest of Omarchy. Arrows drive a cursor, single
   keys jump between views, and the footer always says which keys do what. No
   action that changes the system is bound to a bare keypress.

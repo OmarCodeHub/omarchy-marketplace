@@ -15,6 +15,14 @@
 
 set -uo pipefail
 
+SNAPSHOT="${XDG_RUNTIME_DIR:-/tmp}/io.github.omarcodehub.plugin-manager/bar-snapshot.json"
+
+# --snapshot records the arrangement so it can be put back. Taken when the
+# editor opens, so "undo" means "the bar as I found it", which is the only
+# definition that helps after a run of moves has gone wrong.
+TAKE_SNAPSHOT=0
+[[ ${1:-} == "--snapshot" ]] && TAKE_SNAPSHOT=1
+
 fail() {
   jq -nc --arg error "$1" '{ok: false, error: $error, sections: [], available: []}'
   exit 0
@@ -27,6 +35,9 @@ if ! jq -e . >/dev/null 2>&1 <<<"$config"; then
   source="file"
 fi
 jq -e . >/dev/null 2>&1 <<<"$config" || fail "could not read the shell configuration"
+
+OUT_TMP=$(mktemp) || exit 1
+trap 'rm -f "$OUT_TMP"' EXIT
 
 catalog=$(omarchy-plugin-catalog 2>/dev/null) || catalog="[]"
 [[ -n $catalog ]] || catalog="[]"
@@ -102,4 +113,12 @@ jq -nc \
         placed: ($placed | length),
         available: ($available | length)
       }
-    }' 2>/dev/null || fail "could not parse the shell configuration"
+    }' 2>/dev/null > "$OUT_TMP" || fail "could not parse the shell configuration"
+
+if ((TAKE_SNAPSHOT)); then
+  mkdir -p "$(dirname "$SNAPSHOT")" 2>/dev/null
+  jq -c '{sections: [.sections[] | {section, widgets: [.widgets[].id]}]}' "$OUT_TMP" \
+    > "$SNAPSHOT" 2>/dev/null || true
+fi
+
+cat "$OUT_TMP"
