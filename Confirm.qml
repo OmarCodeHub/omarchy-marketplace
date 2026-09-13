@@ -308,6 +308,14 @@ Item {
         Layout.topMargin: Style.spacing.xs
         spacing: Style.spacing.md
 
+        Text {
+          text: confirm.canProceed ? "enter confirm    esc cancel" : "esc cancel"
+          textFormat: Text.PlainText
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
         Item { Layout.fillWidth: true }
 
         Button {
@@ -333,6 +341,23 @@ Item {
         }
       }
     }
+  }
+
+  // While this is up the panel's key catcher is deliberately blocked, so
+  // without these two the keyboard dead-ends in front of every verb that
+  // changes the system: you could open the dialog with the keyboard but not
+  // finish or leave it. Enter is bound only while the action is actually
+  // allowed, so it cannot fire past a failed probe.
+  Shortcut {
+    sequences: ["Return", "Enter"]
+    enabled: confirm.visible && confirm.canProceed
+    onActivated: confirm.confirmed()
+  }
+
+  Shortcut {
+    sequences: ["Escape"]
+    enabled: confirm.visible
+    onActivated: confirm.cancelled()
   }
 
   Process {

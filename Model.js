@@ -36,6 +36,9 @@ function mergeState(catalog, local, updates, stats) {
   // they are simply absent for anything unlisted. Never let that read as zero
   // interest -- buildRecord keeps `hasStats` so the UI can say nothing at all.
   var statsById = (stats && stats.plugins) || {}
+  // installNote is interned in the index: a handful of distinct strings and a
+  // position per plugin, rather than the same sentence repeated 3000 times.
+  var notes = (catalog && catalog.notes) || []
 
   var updateById = {}
   for (var u = 0; u < updateList.length; u++) updateById[updateList[u].id] = updateList[u]
@@ -60,7 +63,7 @@ function mergeState(catalog, local, updates, stats) {
       if (crepo && localByRepo[crepo]) match = localByRepo[crepo]
     }
     if (match) claimed[match.id] = true
-    records.push(buildRecord(cp, match, match ? updateById[match.id] : null, statsById[cp.id]))
+    records.push(buildRecord(cp, match, match ? updateById[match.id] : null, statsById[cp.id], notes))
   }
 
   // Anything installed that the marketplace does not list: sideloaded plugins,
@@ -68,13 +71,13 @@ function mergeState(catalog, local, updates, stats) {
   for (var k = 0; k < localPlugins.length; k++) {
     if (!claimed[localPlugins[k].id])
       records.push(buildRecord(null, localPlugins[k], updateById[localPlugins[k].id],
-                               statsById[localPlugins[k].id]))
+                               statsById[localPlugins[k].id], notes))
   }
 
   return records
 }
 
-function buildRecord(cat, local, update, stat) {
+function buildRecord(cat, local, update, stat, notes) {
   var installed = !!local
   var firstParty = installed ? !!local.firstParty : false
 
@@ -136,9 +139,9 @@ function buildRecord(cat, local, update, stat) {
     // The commit the marketplace actually reviewed. Installs and updates pin to
     // this rather than to whatever the branch head has since become.
     reviewedCommit: reviewedCommit,
-    observedCommit: (cat && cat.observedCommit) || "",
     license: (cat && cat.license) || "",
-    installNote: (cat && cat.installNote) || "",
+    installNote: (cat && notes && cat.note !== undefined && cat.note !== null
+      && notes[cat.note] !== undefined) ? notes[cat.note] : "",
     repoUpdatedAt: (cat && cat.repoUpdatedAt) || "",
 
     installed: installed,

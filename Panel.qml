@@ -109,7 +109,7 @@ Item {
     root.reload(false)
     Qt.callLater(function () {
       if (!root.restoreOnLoad)
-        searchField.forceActiveFocus()
+        root.focusForView()
     })
   }
 
@@ -371,6 +371,7 @@ Item {
     root.loadError = ""
     root.loadingCatalog = true
     catalogProc.forceRefresh = force === true
+    root.forceUpdateCheck = force === true
     catalogProc.running = true
     root.loadingStats = true
     statsProc.forceRefresh = force === true
@@ -388,6 +389,11 @@ Item {
     root.checkingUpdates = true
     updatesProc.running = true
   }
+
+  // Pressing refresh means "ask upstream again", so the cached update check is
+  // bypassed. Merely opening the panel is not a reason to hit the network once
+  // per installed plugin.
+  property bool forceUpdateCheck: false
 
   function rebuild() {
     root.records = Model.mergeState(root.catalog, root.localState, root.updateState, root.statsState)
@@ -451,6 +457,26 @@ Item {
     root.setScope(keys[next])
   }
 
+  // Where the keyboard should be pointing depends on what is on screen.
+  //
+  // The list is a search-first view, so the field takes focus and typing
+  // filters, which is how the rest of Omarchy behaves. That also means bare
+  // letters cannot be shortcuts there: PanelKeyCatcher is blocked while the
+  // field has focus, so a letter types rather than acting. Global actions are
+  // on Ctrl chords, which work either way.
+  //
+  // The bar view has nothing to type into, so focus goes to the content and
+  // the bare keys hjkl, HJKL and x drive it.
+  function focusForView() {
+    if (root.barView || root.showSettings)
+      content.forceActiveFocus()
+    else
+      searchField.forceActiveFocus()
+  }
+
+  onBarViewChanged: Qt.callLater(root.focusForView)
+  onShowSettingsChanged: Qt.callLater(root.focusForView)
+
   function setScope(next) {
     if (next === "bar" && root.barState === null)
       root.reloadBar()
@@ -469,6 +495,18 @@ Item {
     root.selectedId = root.rows[i].id
     list.currentIndex = i
     list.positionViewAtIndex(i, ListView.Contain)
+  }
+
+  // The one action the selected row is actually offering, or "" when it offers
+  // none. Ctrl+Enter runs it, which is what finally makes install and update
+  // reachable without the mouse. It still opens the confirmation, so the
+  // modifier buys a step, never the commitment.
+  function primaryVerb(r) {
+    if (!r)
+      return ""
+    if (!r.installed)
+      return r.installable ? "install" : ""
+    return r.updateAvailable ? "update" : ""
   }
 
   function moveSelection(delta) {
@@ -541,33 +579,15 @@ Item {
   // destructive verbs stay behind a button and a confirmation, because a
   // stray keypress must never install or remove anything.
   function handleTextKey(t) {
-    // Uppercase HJKL moves the thing under the cursor. Lowercase and the arrows
-    // move the cursor itself, which PanelKeyCatcher handles for us.
-    if (root.barView && (t === "H" || t === "J" || t === "K" || t === "L")) {
-      if (t === "H") barEditor.shiftSelected(-1, 0)
-      else if (t === "L") barEditor.shiftSelected(1, 0)
-      else if (t === "K") barEditor.shiftSelected(0, -1)
-      else if (t === "J") barEditor.shiftSelected(0, 1)
+    // Only reached when the search field does not have focus, which in practice
+    // means the bar view. Everything global lives on a Ctrl chord instead, so
+    // it keeps working while you are typing a search.
+    if (!root.barView)
       return
-    }
-    if (t === "/") {
-      searchField.forceActiveFocus()
-      searchField.selectAll()
-    } else if (t === "r") {
-      root.reload(true)
-      if (root.barView)
-        root.reloadBar()
-    } else if (t === "b") {
-      root.setScope(root.barView ? "browse" : "bar")
-    } else if (t === "s") {
-      root.showSettings = !root.showSettings
-    } else if (t === "g") {
-      root.sidebarOpen = !root.sidebarOpen
-    } else if (t === "u") {
-      root.setScope("updates")
-    } else if (t === "i") {
-      root.setScope("installed")
-    }
+    if (t === "H") barEditor.shiftSelected(-1, 0)
+    else if (t === "L") barEditor.shiftSelected(1, 0)
+    else if (t === "K") barEditor.shiftSelected(0, -1)
+    else if (t === "J") barEditor.shiftSelected(0, 1)
   }
 
   function requestAction(verb, record) {
@@ -766,7 +786,9 @@ Item {
 
   Process {
     id: updatesProc
-    command: root.binDir === "" ? [] : [root.binDir + "/pm-updates"]
+    command: root.binDir === "" ? []
+      : (root.forceUpdateCheck ? [root.binDir + "/pm-updates", "--refresh"]
+                               : [root.binDir + "/pm-updates"])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -926,6 +948,41 @@ Item {
       onCloseRequested: root.dismiss()
       onTextKey: function (t) { root.handleTextKey(t) }
 
+    // Ctrl chords rather than bare letters. A Shortcut fires regardless of
+    // which item has focus, so these keep working while a search is being
+    // typed -- which bare letters cannot, because the text field swallows them.
+    Shortcut { sequences: ["Ctrl+B"]; onActivated: root.setScope(root.barView ? "browse" : "bar") }
+    Shortcut { sequences: ["Ctrl+G"]; onActivated: root.sidebarOpen = !root.sidebarOpen }
+    Shortcut { sequences: ["Ctrl+U"]; onActivated: root.setScope("updates") }
+    Shortcut { sequences: ["Ctrl+I"]; onActivated: root.setScope("installed") }
+    Shortcut { sequences: ["Ctrl+,"]; onActivated: root.showSettings = !root.showSettings }
+    Shortcut {
+      sequences: ["Ctrl+Return", "Ctrl+Enter"]
+      enabled: !root.barView && !root.showSettings && root.pendingAction === null
+      onActivated: {
+        var verb = root.primaryVerb(root.selected)
+        if (verb !== "")
+          root.requestAction(verb, root.selected)
+      }
+    }
+    Shortcut {
+      sequences: ["Ctrl+R", "F5"]
+      onActivated: {
+        root.reload(true)
+        if (root.barView)
+          root.reloadBar()
+      }
+    }
+    Shortcut {
+      sequences: ["Ctrl+F", "Ctrl+L"]
+      onActivated: {
+        if (root.barView)
+          root.setScope("browse")
+        searchField.forceActiveFocus()
+        searchField.selectAll()
+      }
+    }
+
     Item {
       id: content
       anchors.fill: parent
@@ -1025,9 +1082,13 @@ Item {
                 root.selectedId = ""
               root.applyFilter()
             }
-            Keys.onDownPressed: {
-              content.forceActiveFocus()
-              root.moveSelection(1)
+            // The field keeps focus so typing continues to filter; only the
+            // selection moves. That is what a search box over a list should do.
+            Keys.onDownPressed: root.moveSelection(1)
+            Keys.onUpPressed: root.moveSelection(-1)
+            Keys.onReturnPressed: {
+              if (root.rows.length > 0 && list.currentIndex >= 0)
+                root.selectedId = root.rows[list.currentIndex].id
             }
             Keys.onEscapePressed: {
               // Clearing a search is the first thing Esc does while typing;
@@ -1263,17 +1324,27 @@ Item {
         // ───────────────────────────────── key hints
         Text {
           Layout.fillWidth: true
-          visible: window.width >= 620
+          // Wrapped, not elided: a truncated list of shortcuts is worse than
+          // one that takes two lines, and at a tiled width it always truncated.
           textFormat: Text.PlainText
-          elide: Text.ElideRight
+          wrapMode: Text.WordWrap
+          maximumLineCount: 3
           color: Util.alpha(Color.foreground, 0.4)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
-          text: root.barView
-            ? "\u2191\u2193\u2190\u2192 / hjkl move cursor   HJKL move the widget   x remove   enter place   b back   r refresh   esc close"
-            : root.showSettings
-              ? "s close settings   esc back"
-              : "\u2191\u2193 select   \u2190\u2192 / tab change view   / search   g sidebar   b bar   u updates   i installed   s settings   r refresh   esc close"
+          // Only the keys that do something here, and the action key only when
+          // the selected row is actually offering one. A hint for a key that
+          // does nothing is what made the old footer read as broken.
+          text: {
+            if (root.barView)
+              return "hjkl or arrows move the cursor   HJKL move the widget   x remove   enter place   ctrl+b back   ctrl+r refresh   esc close"
+            if (root.showSettings)
+              return "ctrl+, close settings   esc back"
+            var verb = root.primaryVerb(root.selected)
+            return "type to search   \u2191\u2193 select   enter open"
+              + (verb === "" ? "" : "   ctrl+enter " + verb)
+              + "   tab change view   ctrl+b bar   ctrl+g sidebar   ctrl+u updates   ctrl+, settings   ctrl+r refresh   esc close"
+          }
         }
 
         // ───────────────────────────────── job strip

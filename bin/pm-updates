@@ -15,13 +15,22 @@ export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
 
 PLUGINS_DIR="$HOME/.config/omarchy/plugins"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/io.github.omarcodehub.plugin-manager"
+CACHE="$CACHE_DIR/updates.json"
+# Every check is a network round trip per installed plugin, and it ran on every
+# single panel open. Upstream does not move often enough to be worth that, so
+# the answer is cached and the panel asks for a fresh one only when the user
+# presses refresh.
+MAX_AGE=900
 ONLY=""
+FORCE=0
 TIMEOUT=20
 
 while (($# > 0)); do
   case "$1" in
   --id) ONLY="${2:-}"; shift 2 ;;
   --timeout) TIMEOUT="${2:-20}"; shift 2 ;;
+  --refresh) FORCE=1; shift ;;
   -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
   *) echo "pm-updates: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -62,6 +71,19 @@ check_one() {
       status: $status, detail: $detail}'
 }
 
+cache_age() {
+  [[ -s $CACHE ]] || { echo 999999; return; }
+  echo $(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0) ))
+}
+
+# A cached answer is only good for the whole set, never for a single id.
+if [[ -z $ONLY ]] && ((!FORCE)) && (($(cache_age) <= MAX_AGE)); then
+  if jq -e '(.updates | type) == "array"' "$CACHE" >/dev/null 2>&1; then
+    jq -c '. + {cached: true}' "$CACHE"
+    exit 0
+  fi
+fi
+
 targets=()
 if [[ -d $PLUGINS_DIR ]]; then
   for dir in "$PLUGINS_DIR"/*/; do
@@ -84,5 +106,11 @@ for dir in "${targets[@]}"; do
 done
 wait
 
-jq -sc '{ok: true, checked: length, available: (map(select(.behind)) | length), updates: .}' \
-  "$tmp"/*.json
+result=$(jq -sc '{ok: true, checked: length, available: (map(select(.behind)) | length), updates: .}' \
+  "$tmp"/*.json)
+
+if [[ -z $ONLY ]] && [[ -n $result ]]; then
+  mkdir -p "$CACHE_DIR" 2>/dev/null
+  printf '%s' "$result" > "$CACHE" 2>/dev/null || true
+fi
+printf '%s\n' "$result"

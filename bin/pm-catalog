@@ -148,14 +148,24 @@ fi
 # Rebuild the reduced index only when the full catalog is newer than it.
 if [[ ! -f $INDEX || $FULL -nt $INDEX ]]; then
   tmp=$(mktemp "$CACHE_DIR/.index.XXXXXX") || exit 1
-  if jq -c '{
+  # installNote is boilerplate: 3000+ entries drawn from a handful of distinct
+  # strings, which was a third of a megabyte of the index repeating itself.
+  # It is interned into a lookup and referenced by position instead.
+  #
+  # observedCommit is not emitted at all: nothing reads it. What matters is the
+  # reviewed commit, and what the repository points at *now* is observed live by
+  # bin/pm-probe rather than taken from a snapshot in the feed.
+  if jq -c '
+    ([ .plugins[].installNote // "" ] | unique) as $notes
+    | {
       generatedAt: (.generatedAt // ""),
-      plugins: [ .plugins[] | {
+      notes: $notes,
+      plugins: [ .plugins[] | . as $p | {
         id, name, author, category, kind, version,
         description: (.description // ""),
         tags: (.tags // []),
         license: (.license // ""),
-        installNote: (.installNote // ""),
+        note: ($notes | index($p.installNote // "")),
         shot: (.previewImage // ""),
         repo: (.repo // ""),
         stars: (.stars // 0),
@@ -166,7 +176,6 @@ if [[ ! -f $INDEX || $FULL -nt $INDEX ]]; then
         accent: (.accent // ""),
         thumb: (.previewThumbnail // ""),
         reviewedCommit: (.upstreamValidatedCommit // .listingValidatedCommit // ""),
-        observedCommit: (.upstreamObservedCommit // ""),
         repoUpdatedAt: (.repositoryUpdatedAt // "")
       } ]
     }' "$FULL" >"$tmp" 2>/dev/null; then
