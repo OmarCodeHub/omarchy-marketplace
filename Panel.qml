@@ -478,6 +478,10 @@ Item {
   onShowSettingsChanged: Qt.callLater(root.focusForView)
 
   function setScope(next) {
+    // Settings is an overlay over the views, not one of them, so arriving
+    // anywhere leaves it. Without this a destination chord pressed from
+    // settings changed the view behind the overlay and looked like a dead key.
+    root.showSettings = false
     if (next === "bar" && root.barState === null)
       root.reloadBar()
     if (root.scope === next)
@@ -562,6 +566,10 @@ Item {
 
   // One place that decides what Esc means, so the key catcher, the search
   // field and the header button cannot disagree about it.
+  // One ladder, climbed the same way from every view: leave whatever is
+  // covering the list, innermost first, and close the window only when nothing
+  // is. Escape used to skip the bar editor entirely, so the same key that
+  // stepped out of settings closed the whole app from the bar.
   function dismiss() {
     if (root.pendingAction)
       root.pendingAction = null
@@ -571,6 +579,8 @@ Item {
       root.showSettings = false
     else if (window.detailTakesOver)
       root.selectedId = ""
+    else if (root.barView)
+      root.setScope("browse")
     else
       root.requestClose()
   }
@@ -897,6 +907,19 @@ Item {
     // BeforeItem), which is what lets arrows drive a cursor instead of being
     // eaten by the list's own scrolling. `blocked` hands keys back to the
     // search field while it has focus, so typing still types.
+    //
+    // The rule every binding below follows: a key means the same thing in
+    // every view. Earlier it did not, and the footer had to label the same
+    // chord two different ways depending on where you stood.
+    //
+    //   arrows, hjkl   move the cursor inside this view, never between views
+    //   enter          activate what the cursor is on
+    //   ctrl+enter     run the action that item offers, if it offers one
+    //   tab, shift+tab next and previous view, from every view
+    //   ctrl+b u i ,   destinations: always the same place, never a toggle
+    //   ctrl+g         show or hide the sidebar, which is a panel not a place
+    //   esc            leave whatever is covering the list, innermost first,
+    //                  and close the window only when nothing is
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
@@ -916,12 +939,12 @@ Item {
         }
         // Left and right walk the sidebar's scopes when it is on screen, so the
         // whole app is reachable without touching the list.
-        if (dx !== 0) {
-          if (window.detailTakesOver && dx < 0) {
-            root.selectedId = ""
-            return
-          }
-          root.stepScope(dx)
+        // Arrows move the cursor inside the current view and never between
+        // views, which is what Tab is for. Left is the one spatial exception:
+        // on a narrow window the detail has replaced the list, so left walks
+        // back out of it to where the list was.
+        if (dx < 0 && window.detailTakesOver) {
+          root.selectedId = ""
           return
         }
         if (dy !== 0)
@@ -937,10 +960,7 @@ Item {
         if (root.rows.length > 0 && list.currentIndex >= 0)
           root.selectedId = root.rows[list.currentIndex].id
       }
-      onTabRequested: function (direction) {
-        if (!root.barView && !root.showSettings)
-          root.stepScope(direction)
-      }
+      onTabRequested: function (direction) { root.stepScope(direction) }
       onDeleteRequested: {
         if (root.barView)
           barEditor.removeCursorWidget()
@@ -951,11 +971,16 @@ Item {
     // Ctrl chords rather than bare letters. A Shortcut fires regardless of
     // which item has focus, so these keep working while a search is being
     // typed -- which bare letters cannot, because the text field swallows them.
-    Shortcut { sequences: ["Ctrl+B"]; onActivated: root.setScope(root.barView ? "browse" : "bar") }
+    // Destinations, never toggles. Ctrl+B used to mean "bar" from the list and
+    // "back" from the bar, so one key had two meanings depending on where it
+    // was pressed, and the hint footer had to label it two different ways.
+    // Each of these now lands in the same place from everywhere, and Escape is
+    // the only key that goes back.
+    Shortcut { sequences: ["Ctrl+B"]; onActivated: root.setScope("bar") }
     Shortcut { sequences: ["Ctrl+G"]; onActivated: root.sidebarOpen = !root.sidebarOpen }
     Shortcut { sequences: ["Ctrl+U"]; onActivated: root.setScope("updates") }
     Shortcut { sequences: ["Ctrl+I"]; onActivated: root.setScope("installed") }
-    Shortcut { sequences: ["Ctrl+,"]; onActivated: root.showSettings = !root.showSettings }
+    Shortcut { sequences: ["Ctrl+,"]; onActivated: root.showSettings = true }
     Shortcut {
       sequences: ["Ctrl+Return", "Ctrl+Enter"]
       enabled: !root.barView && !root.showSettings && root.pendingAction === null
@@ -1341,13 +1366,13 @@ Item {
           // does nothing is what made the old footer read as broken.
           text: {
             if (root.barView)
-              return "hjkl or arrows move the cursor   HJKL move the widget   x remove   enter place   ctrl+b back   ctrl+r refresh   esc close"
+              return "hjkl or arrows move the cursor   HJKL move the widget   enter place   x remove   tab change view   ctrl+r refresh   esc back"
             if (root.showSettings)
-              return "ctrl+, close settings   esc back"
+              return "tab change view   esc back"
             var verb = root.primaryVerb(root.selected)
             return "type to search   \u2191\u2193 select   enter open"
               + (verb === "" ? "" : "   ctrl+enter " + verb)
-              + "   tab change view   ctrl+b bar   ctrl+g sidebar   ctrl+u updates   ctrl+, settings   ctrl+r refresh   esc close"
+              + "   tab change view   ctrl+b bar   ctrl+u updates   ctrl+i installed   ctrl+g sidebar   ctrl+, settings   ctrl+r refresh   esc close"
           }
         }
 
