@@ -1044,7 +1044,13 @@ Item {
             Layout.fillWidth: true
             elide: Text.ElideRight
             textFormat: Text.PlainText
-            visible: window.width >= 700
+            // The rest of this row is fixed width: the title, a 320px search
+            // field and two buttons. At the width Hyprland hands this panel
+            // there is no slack left at all, so this text elided to "312..."
+            // and read as a rendering fault. It appears only where it fits,
+            // and none of what it says is unavailable elsewhere: the counts
+            // are in the sidebar and a load error also fills the detail pane.
+            visible: window.width >= 980 && text !== ""
             color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -1054,10 +1060,8 @@ Item {
               if (root.busy)
                 return "Loading..."
               var bits = []
-              bits.push(root.counts.browse + " listed")
-              bits.push(root.counts.installed + " installed")
               if (root.counts.updates > 0)
-                bits.push(root.counts.updates + " update" + (root.counts.updates === 1 ? "" : "s"))
+                bits.push(root.counts.updates + " update" + (root.counts.updates === 1 ? "" : "s") + " available")
               if (root.catalog && root.catalog.stale)
                 bits.push("offline copy")
               return bits.join("  ·  ")
