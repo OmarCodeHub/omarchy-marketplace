@@ -378,80 +378,101 @@ Item {
   }
 
   // One widget. Draggable, clickable, and the keyboard cursor lands on it.
-  component WidgetRow: Rectangle {
-    id: row
+  //
+  // Two items, not one. The outer cell is what the ColumnLayout positions and
+  // it is never moved. The inner chip is what gets dragged, and its x and y are
+  // relative to that cell, so putting it back at 0,0 returns it to its own slot.
+  //
+  // Dragging the layout-managed item directly does not work: a layout sets its
+  // children's x and y, so assigning those from a drag fights it, and resetting
+  // them afterwards parks the row at the column's origin on top of the first
+  // widget until something else makes the layout run again.
+  component WidgetRow: Item {
+    id: cell
     property var widget: null
     property bool placed: true
-    readonly property bool hasCursor: row.widget !== null && barView.selectedId === row.widget.id
+    readonly property bool hasCursor: cell.widget !== null && barView.selectedId === cell.widget.id
 
     implicitHeight: Style.spacing.popupRowHeight
-    radius: Style.cornerRadius
-    color: row.hasCursor ? Color.menu.selectedBackground
-      : rowMouse.containsMouse ? Style.hoverFill : Util.alpha(Color.foreground, 0.04)
-    border.width: row.hasCursor ? Style.selectedBorderWidth : 0
-    border.color: Color.accent
-    opacity: Drag.active ? 0.6 : 1
+    implicitWidth: Style.space(140)
 
-    Drag.active: rowMouse.drag.active
-    Drag.hotSpot.x: width / 2
-    Drag.hotSpot.y: height / 2
+    Rectangle {
+      id: chip
+      width: cell.width
+      height: cell.height
+      radius: Style.cornerRadius
+      color: cell.hasCursor ? Color.menu.selectedBackground
+        : rowMouse.containsMouse ? Style.hoverFill : Util.alpha(Color.foreground, 0.04)
+      border.width: cell.hasCursor ? Style.selectedBorderWidth : 0
+      border.color: Color.accent
 
-    RowLayout {
-      anchors.fill: parent
-      anchors.leftMargin: Style.spacing.sm
-      anchors.rightMargin: Style.spacing.sm
-      spacing: Style.spacing.xs
+      // Lifted while dragging so it passes over the other columns rather than
+      // under them.
+      z: Drag.active ? 10 : 0
+      opacity: Drag.active ? 0.7 : 1
 
-      Text {
-        Layout.fillWidth: true
-        text: row.widget ? row.widget.name : ""
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        color: row.widget && row.widget.missing ? Color.urgent
-          : row.hasCursor ? Color.menu.selectedText : Color.popups.text
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
+      Drag.active: rowMouse.drag.active
+      Drag.hotSpot.x: width / 2
+      Drag.hotSpot.y: height / 2
+
+      RowLayout {
+        anchors.fill: parent
+        anchors.leftMargin: Style.spacing.sm
+        anchors.rightMargin: Style.spacing.sm
+        spacing: Style.spacing.xs
+
+        Text {
+          Layout.fillWidth: true
+          text: cell.widget ? cell.widget.name : ""
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          color: cell.widget && cell.widget.missing ? Color.urgent
+            : cell.hasCursor ? Color.menu.selectedText : Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        // A widget whose plugin is gone still occupies a slot; say so rather
+        // than drawing a blank row.
+        Text {
+          visible: cell.widget !== null && cell.widget.missing === true
+          text: "missing"
+          textFormat: Text.PlainText
+          color: Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
       }
 
-      // A widget whose plugin is gone still occupies a slot; say so rather
-      // than drawing a blank row.
-      Text {
-        visible: row.widget !== null && row.widget.missing === true
-        text: "missing"
-        textFormat: Text.PlainText
-        color: Color.urgent
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-      }
-    }
+      MouseArea {
+        id: rowMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: cell.placed ? Qt.SizeAllCursor : Qt.PointingHandCursor
+        drag.target: barView.busy ? null : chip
+        drag.threshold: 6
 
-    MouseArea {
-      id: rowMouse
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: row.placed ? Qt.SizeAllCursor : Qt.PointingHandCursor
-      drag.target: barView.busy ? null : row
-      drag.threshold: 6
+        // Recorded on press rather than when the drag starts: MouseArea has no
+        // onDragActiveChanged, drag.active lives in the drag group, and a drop
+        // area only reads this at the moment of the drop anyway.
+        onPressed: {
+          if (!cell.widget)
+            return
+          barView.selectedId = cell.widget.id
+          barView.dragId = cell.widget.id
+          barView.dragPlaced = cell.placed
+        }
 
-      // Recorded on press rather than when the drag starts: MouseArea has no
-      // onDragActiveChanged, drag.active lives in the drag group, and a drop
-      // area only reads this at the moment of the drop anyway.
-      onPressed: {
-        if (!row.widget)
-          return
-        barView.selectedId = row.widget.id
-        barView.dragId = row.widget.id
-        barView.dragPlaced = row.placed
-      }
-
-      onReleased: {
-        if (row.Drag.active)
-          row.Drag.drop()
-        // The row was dragged out of its layout slot; put it back and let the
-        // reloaded data decide where it really belongs.
-        row.x = 0
-        row.y = 0
-        barView.dragId = ""
+        onReleased: {
+          // Only after a real drag. Assigning x and y on a plain click would
+          // move the chip for no reason.
+          if (chip.Drag.active) {
+            chip.Drag.drop()
+            chip.x = 0
+            chip.y = 0
+          }
+          barView.dragId = ""
+        }
       }
     }
   }
