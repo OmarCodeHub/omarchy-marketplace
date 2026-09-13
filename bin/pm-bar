@@ -1,0 +1,105 @@
+#!/bin/bash
+# The bar as it is actually laid out right now, plus what could be added to it.
+#
+# Omarchy can move and place bar widgets from the command line, but nothing
+# shows you the arrangement. This reads it so the panel can.
+#
+# The shell owns shell.json and rewrites it whenever the bar changes, so the
+# effective config is asked of the running shell rather than parsed from the
+# file behind its back. Falling back to the file matters only when the shell is
+# down, in which case nothing can be rearranged anyway.
+#
+# Usage: pm-bar
+# Output: one JSON object with the three sections in order, plus the widgets
+# that are installed and could be placed but currently are not.
+
+set -uo pipefail
+
+fail() {
+  jq -nc --arg error "$1" '{ok: false, error: $error, sections: [], available: []}'
+  exit 0
+}
+
+config=$(omarchy-shell shell listShellConfig 2>/dev/null)
+source="shell"
+if ! jq -e . >/dev/null 2>&1 <<<"$config"; then
+  config=$(cat "$HOME/.config/omarchy/shell.json" 2>/dev/null)
+  source="file"
+fi
+jq -e . >/dev/null 2>&1 <<<"$config" || fail "could not read the shell configuration"
+
+catalog=$(omarchy-plugin-catalog 2>/dev/null) || catalog="[]"
+[[ -n $catalog ]] || catalog="[]"
+
+plugins=$(omarchy plugin list --json 2>/dev/null) || plugins="[]"
+[[ -n $plugins ]] || plugins="[]"
+
+jq -nc \
+  --argjson config "$config" \
+  --argjson catalog "$catalog" \
+  --argjson plugins "$plugins" \
+  --arg source "$source" '
+  # A layout entry is either a bare id or an object carrying the id plus that
+  # widget entry inline settings. Both shapes have to be understood.
+  def entry_id: if type == "object" then .id else . end;
+
+  ($catalog | map({key: .id, value: .}) | from_entries) as $cat
+  | ($plugins | map({key: .id, value: .}) | from_entries) as $state
+  | ($config.bar.layout // {}) as $layout
+
+  # A widget can sit in the layout while its plugin is gone; say so rather than
+  # rendering a blank row.
+  | def describe($id; $section; $index):
+      ($cat[$id] // null) as $c
+      | {
+          id: $id,
+          section: $section,
+          index: $index,
+          name: (($c.barWidget.displayName // $c.name) // $id),
+          description: (($c.barWidget.description // $c.description) // ""),
+          category: ($c.barWidget.category // ""),
+          firstParty: (($state[$id].firstParty) // false),
+          kinds: (($c.kinds) // []),
+          # Taking a widget off the bar deletes its layout entry, and that entry
+          # is also what marks a plugin enabled. For a widget-only plugin that is
+          # the whole story. For one that also owns a panel it means the panel
+          # can no longer be summoned, which the UI has to say out loud.
+          alsoDisablesPanel: ((($c.kinds) // []) | any(. != "bar-widget")),
+          installed: ($c != null),
+          missing: ($c == null)
+        };
+
+  [ "left", "center", "right" ]
+  | map(. as $section
+      | { section: $section,
+          widgets: [ ($layout[$section] // []) | to_entries[]
+                     | describe((.value | entry_id); $section; .key) ] })
+  as $sections
+
+  | [ $sections[].widgets[].id ] as $placed
+
+  # Installed bar widgets that are not currently anywhere on the bar. A bar
+  # replaces the bar rather than sitting in it, so those are never candidates.
+  | [ $catalog[]
+      | select((.kinds // []) | index("bar-widget"))
+      | select((.kinds // []) | index("bar") | not)
+      | select(.id as $i | $placed | index($i) | not)
+      | { id: .id,
+          name: ((.barWidget.displayName // .name) // .id),
+          description: ((.barWidget.description // .description) // ""),
+          category: (.barWidget.category // ""),
+          firstParty: (($state[.id].firstParty) // false) } ]
+  | sort_by(.name)
+  as $available
+
+  | {
+      ok: true,
+      source: $source,
+      barPosition: ($config.bar.position // "top"),
+      sections: $sections,
+      available: $available,
+      counts: {
+        placed: ($placed | length),
+        available: ($available | length)
+      }
+    }' 2>/dev/null || fail "could not parse the shell configuration"

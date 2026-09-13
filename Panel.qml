@@ -96,8 +96,11 @@ Item {
     // `{"view":"settings"}` opens straight into Settings, so the Omarchy menu
     // or a keybinding can go there directly.
     var view = String(payload.view || "")
-    if (view !== "")
+    if (view !== "") {
       root.showSettings = (view === "settings")
+      if (view === "bar")
+        root.setScope("bar")
+    }
 
     // The drawer is a narrow-window affordance; it should never be found
     // already open on a fresh summon.
@@ -189,7 +192,8 @@ Item {
     { key: "updates", label: "Updates", count: root.counts.updates },
     { key: "enabled", label: "Enabled", count: root.counts.enabled },
     { key: "builtin", label: "Built-in", count: root.counts.builtin },
-    { key: "all", label: "Everything", count: root.records.length }
+    { key: "all", label: "Everything", count: root.records.length },
+    { key: "bar", label: "Bar layout", count: 0 }
   ]
 
   readonly property var categories: root.records.length
@@ -270,6 +274,81 @@ Item {
     previewProc.running = true
   }
 
+  // ─────────────────────────────────────────────── bar layout
+  property var barState: null
+  property bool loadingBar: false
+  property bool barBusy: false
+  property string barError: ""
+
+  function reloadBar() {
+    if (root.binDir === "")
+      return
+    root.loadingBar = true
+    barProc.running = true
+  }
+
+  // Bar edits are applied one at a time and the layout is read back after each
+  // one, because the shell rewrites shell.json itself and the result of a move
+  // is its business, not something to be predicted here.
+  function runBarAction(args) {
+    if (root.binDir === "" || root.barBusy)
+      return
+    root.barError = ""
+    root.barBusy = true
+    barActionProc.pending = args
+    barActionProc.running = true
+  }
+
+  Process {
+    id: barProc
+    command: root.binDir === "" ? [] : [root.binDir + "/pm-bar"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.loadingBar = false
+        try {
+          root.barState = JSON.parse(text || "null")
+        } catch (e) {
+          root.barState = null
+        }
+      }
+    }
+    onExited: root.loadingBar = false
+  }
+
+  Process {
+    id: barActionProc
+    property var pending: []
+    command: root.binDir === "" || pending.length === 0
+      ? [] : [root.binDir + "/pm-act"].concat(pending)
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var msg = String(text || "").trim()
+        if (msg !== "")
+          root.barError = msg
+      }
+    }
+    onExited: function (exitCode) {
+      if (exitCode !== 0 && root.barError === "")
+        root.barError = "That change could not be applied (exit " + exitCode + ")."
+      barActionProc.pending = []
+      root.barBusy = false
+      barReloadDelay.restart()
+    }
+  }
+
+  Timer {
+    id: barReloadDelay
+    interval: 350
+    onTriggered: {
+      root.reloadBar()
+      // A widget coming off the bar changes what is installed and enabled, so
+      // the plugin list has to catch up too.
+      root.refreshLocal()
+    }
+  }
+
   // ─────────────────────────────────────────────── job state
   property string jobId: ""
   property var job: null
@@ -348,7 +427,11 @@ Item {
     root.sidebarOpen = false
   }
 
+  readonly property bool barView: root.scope === "bar"
+
   function setScope(next) {
+    if (next === "bar" && root.barState === null)
+      root.reloadBar()
     if (root.scope === next)
       return
     root.scope = next
@@ -382,6 +465,78 @@ Item {
   // Nothing from the marketplace feed is ever executed. The catalog ships an
   // `installCommand` string and it is deliberately ignored: only the verb and
   // the repository URL cross into bin/pm-act, which rebuilds the argv itself.
+  // Taking a widget off the bar deletes its layout entry, and that entry is
+  // also what marks a plugin enabled. For a widget-only plugin that is simply
+  // "remove from the bar". For one that also owns a panel it stops the panel
+  // being summonable, so that case asks first.
+  function confirmBarRemoval(id) {
+    var widget = null
+    if (root.barState && root.barState.sections) {
+      for (var i = 0; i < root.barState.sections.length; i++) {
+        var list = root.barState.sections[i].widgets
+        for (var j = 0; j < list.length; j++)
+          if (list[j].id === id)
+            widget = list[j]
+      }
+    }
+    if (!widget)
+      return
+    if (!widget.alsoDisablesPanel) {
+      root.runBarAction(["bar-remove", id])
+      return
+    }
+    root.pendingAction = {
+      verb: "bar-remove",
+      record: {
+        id: id,
+        name: widget.name,
+        reviewedCommit: "",
+        repo: "",
+        verified: false,
+        kinds: widget.kinds
+      }
+    }
+  }
+
+  // One place that decides what Esc means, so the key catcher, the search
+  // field and the header button cannot disagree about it.
+  function dismiss() {
+    if (root.pendingAction)
+      root.pendingAction = null
+    else if (root.sidebarOpen)
+      root.sidebarOpen = false
+    else if (root.showSettings)
+      root.showSettings = false
+    else if (window.detailTakesOver)
+      root.selectedId = ""
+    else
+      root.requestClose()
+  }
+
+  // Single-key shortcuts. Deliberately none of them change the system: the
+  // destructive verbs stay behind a button and a confirmation, because a
+  // stray keypress must never install or remove anything.
+  function handleTextKey(t) {
+    if (t === "/") {
+      searchField.forceActiveFocus()
+      searchField.selectAll()
+    } else if (t === "r") {
+      root.reload(true)
+      if (root.barView)
+        root.reloadBar()
+    } else if (t === "b") {
+      root.setScope(root.barView ? "browse" : "bar")
+    } else if (t === "s") {
+      root.showSettings = !root.showSettings
+    } else if (t === "g") {
+      root.sidebarOpen = !root.sidebarOpen
+    } else if (t === "u") {
+      root.setScope("updates")
+    } else if (t === "i") {
+      root.setScope("installed")
+    }
+  }
+
   function requestAction(verb, record) {
     if (root.jobRunning)
       return
@@ -419,6 +574,11 @@ Item {
         return
       }
       args = ["update", record.id, target]
+    } else if (pending.verb === "bar-remove") {
+      // Not a plugin install, so it does not go through the detached job
+      // runner: nothing here destroys the panel mid-flight.
+      root.runBarAction(["bar-remove", record.id])
+      return
     } else {
       args = [pending.verb, record.id]
     }
@@ -677,6 +837,52 @@ Item {
     readonly property bool showSidebar: width >= 700
     readonly property bool detailTakesOver: !wide && root.selectedId !== ""
 
+    // Omarchy is keyboard-first, so the panel is too. PanelKeyCatcher is the
+    // shell's own dispatcher: it takes keys before descendants (Keys.priority
+    // BeforeItem), which is what lets arrows drive a cursor instead of being
+    // eaten by the list's own scrolling. `blocked` hands keys back to the
+    // search field while it has focus, so typing still types.
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      blocked: searchField.activeFocus || root.pendingAction !== null
+
+      Keys.onPressed: function (event) {
+        // Shift with an arrow moves the widget itself. Handled before the
+        // catcher's own move signal so the two cannot both act on one press.
+        if (root.barView && (event.modifiers & Qt.ShiftModifier)) {
+          if (event.key === Qt.Key_Left) { barEditor.shiftSelected(-1, 0); event.accepted = true }
+          else if (event.key === Qt.Key_Right) { barEditor.shiftSelected(1, 0); event.accepted = true }
+          else if (event.key === Qt.Key_Up) { barEditor.shiftSelected(0, -1); event.accepted = true }
+          else if (event.key === Qt.Key_Down) { barEditor.shiftSelected(0, 1); event.accepted = true }
+        }
+      }
+
+      onMoveRequested: function (dx, dy) {
+        if (root.barView) {
+          barEditor.moveCursor(dx, dy)
+          return
+        }
+        if (dy !== 0)
+          root.moveSelection(dy)
+      }
+      onActivateRequested: {
+        if (root.barView) {
+          barEditor.activateCursor()
+          return
+        }
+        // Enter on a row is "show me this", never "install this". An action
+        // that changes the system stays behind its own button and dialog.
+        if (root.rows.length > 0 && list.currentIndex >= 0)
+          root.selectedId = root.rows[list.currentIndex].id
+      }
+      onDeleteRequested: {
+        if (root.barView)
+          barEditor.removeCursorWidget()
+      }
+      onCloseRequested: root.dismiss()
+      onTextKey: function (t) { root.handleTextKey(t) }
+
     Item {
       id: content
       anchors.fill: parent
@@ -684,19 +890,7 @@ Item {
 
       Keys.onPressed: function (event) {
         if (event.key === Qt.Key_Escape) {
-          // Unwind one layer at a time: dialog, then the detail that replaced
-          // the list on a narrow window, then the panel itself.
-          if (root.pendingAction) {
-            root.pendingAction = null
-          } else if (root.sidebarOpen) {
-            root.sidebarOpen = false
-          } else if (root.showSettings) {
-            root.showSettings = false
-          } else if (window.detailTakesOver) {
-            root.selectedId = ""
-          } else {
-            root.requestClose()
-          }
+          root.dismiss()
           event.accepted = true
         } else if (event.key === Qt.Key_F5
                    || (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier))) {
@@ -801,12 +995,14 @@ Item {
               root.moveSelection(1)
             }
             Keys.onEscapePressed: {
-              if (text !== "")
+              // Clearing a search is the first thing Esc does while typing;
+              // beyond that it unwinds like everywhere else.
+              if (text !== "") {
                 text = ""
-              else if (window.detailTakesOver)
-                root.selectedId = ""
-              else
-                root.requestClose()
+              } else {
+                content.forceActiveFocus()
+                root.dismiss()
+              }
             }
           }
 
@@ -854,11 +1050,12 @@ Item {
             Layout.fillHeight: true
             Layout.minimumWidth: Style.space(260)
             spacing: Style.spacing.sm
-            visible: !window.detailTakesOver && !root.showSettings
+            visible: !window.detailTakesOver && !root.showSettings && !root.barView
 
             RowLayout {
               Layout.fillWidth: true
               spacing: Style.spacing.controlGap
+              visible: !root.barView
 
               // The sidebar carries the scope switcher, but it needs 700px and
               // the window is tiled at whatever Hyprland gives it — commonly
@@ -987,7 +1184,7 @@ Item {
             Layout.preferredWidth: window.detailTakesOver
               ? -1 : Math.min(Style.space(400), window.width * 0.38)
             Layout.fillHeight: true
-            visible: (window.wide || window.detailTakesOver) && !root.showSettings
+            visible: (window.wide || window.detailTakesOver) && !root.showSettings && !root.barView
             record: root.selected
             jobRunning: root.jobRunning
             previewFile: root.previewSource(root.selected ? root.selected.shot : "", root.previewRevision)
@@ -995,6 +1192,22 @@ Item {
             showBack: window.detailTakesOver
             onBack: root.selectedId = ""
             onAct: function (verb) { root.requestAction(verb, root.selected) }
+          }
+
+          BarLayout {
+            id: barEditor
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: root.barView && !root.showSettings
+            barData: root.barState
+            busy: root.barBusy
+            onMoveWidget: function (id, section, index) {
+              root.runBarAction(["bar-move", id, section, String(index)])
+            }
+            onPutWidget: function (id, section, index) {
+              root.runBarAction(["bar-put", id, section, String(index)])
+            }
+            onRemoveWidget: function (id) { root.confirmBarRemoval(id) }
           }
 
           // Settings replaces the whole body rather than sitting beside it:
@@ -1007,6 +1220,22 @@ Item {
             binDir: root.binDir
             pluginId: root.pluginId
           }
+        }
+
+        // ───────────────────────────────── key hints
+        Text {
+          Layout.fillWidth: true
+          visible: window.width >= 620
+          textFormat: Text.PlainText
+          elide: Text.ElideRight
+          color: Util.alpha(Color.foreground, 0.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          text: root.barView
+            ? "\u2191\u2193\u2190\u2192 move cursor   shift+\u2191\u2193\u2190\u2192 move widget   del remove   b back   r refresh   esc close"
+            : root.showSettings
+              ? "s close settings   esc back"
+              : "\u2191\u2193 select   / search   g views   b bar layout   u updates   i installed   s settings   r refresh   esc close"
         }
 
         // ───────────────────────────────── job strip
@@ -1074,6 +1303,7 @@ Item {
         onConfirmed: root.confirmAction()
         onCancelled: root.pendingAction = null
       }
+    }
     }
   }
 }

@@ -20,6 +20,14 @@ marketplace, install, update, enable, disable and remove — without a terminal.
 - **Update** with a read-only preview of the incoming commits and changed files
   *before* anything is applied.
 - **Enable / disable / remove** anything installed.
+- **Arrange the bar.** Omarchy can move and place bar widgets from the command
+  line but shows the arrangement nowhere. The Bar layout view draws the three
+  sections the way the bar is laid out, left to right, with every placed widget
+  in order and everything installed but unplaced below. Move a widget between
+  sections or reorder it within one, entirely from the keyboard.
+- **Keyboard first**, like the rest of Omarchy. Arrows drive a cursor, single
+  keys jump between views, and the footer always says which keys do what. No
+  action that changes the system is bound to a bare keypress.
 - **Metadata** for what is on disk — kinds, entry points, settings, install
   path, and the git branch, commit and working-tree state — plus links out to
   the repository and to the plugin's marketplace page.
@@ -115,6 +123,7 @@ Six helpers back the panel; four are joined by plugin id, falling back to the re
 | `bin/pm-updates` | `git ls-remote origin HEAD` per plugin, in parallel — one ref lookup each, no objects downloaded, nothing written to the checkout. Safe to run on a timer. |
 | `bin/pm-probe` | Read-only. Asks the repository, with `git ls-remote`, what it points at *now*, so the panel can compare that against the commit the catalogue says was reviewed. Two independent sources: the feed cannot quietly claim a repository has not moved. |
 | `bin/pm-preview` | Fetches preview images from the marketplace's fixed origin into a local cache, under limits — no redirects, HTTPS only, a deadline, an announced-size rejection, a hard cap on bytes reaching disk, a real-image-and-sane-dimensions check, and bounded concurrency. The UI displays only the validated local file; no `Image` in this plugin ever points at a remote URL. |
+| `bin/pm-bar` | The bar as it is actually laid out: the three sections in order, what is installed but unplaced, and which widgets would take a panel down with them if removed. Read from the running shell rather than parsed from `shell.json` behind its writer. |
 | `bin/pm-stats` | Hearts, views and installs from the marketplace's engagement API (`api.omarchyplugins.com/v1/stats`), which is where those live — they are not in the catalog file. It sends `no-store` and no ETag, so this caches locally on a short TTL instead. Decoration only: if it is down, everything else still works. |
 
 Everything installed shows up whether or not the marketplace lists it, and
