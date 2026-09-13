@@ -1,6 +1,6 @@
 ## What this changes
 
-<!-- And why. The diff already says what; the description should say why. -->
+<!-- And why. The diff already says what, so the description should say why. -->
 
 ## How it was verified
 
