@@ -38,6 +38,27 @@ done
 
 [[ $TIMEOUT =~ ^[0-9]+$ ]] || TIMEOUT=20
 
+# What the panel would actually offer, which is not the same question as "has
+# origin moved". Installs are pinned to the commit the marketplace reviewed, so
+# a plugin sitting exactly on its reviewed commit is up to date even when the
+# branch head has run ahead of it. The panel has compared against the reviewed
+# commit since 1.1.0 and this did not, so the bar badge counted updates the
+# Updates view then refused to show.
+#
+# Read from the cached index only. This runs on a timer in the bar and must
+# never reach the network for the catalogue.
+REVIEWED_MAP="{}"
+if [[ -s $CACHE_DIR/index.json ]]; then
+  REVIEWED_MAP=$(jq -c '[.plugins[]? | select((.reviewedCommit // "") != "")
+    | {key: .id, value: .reviewedCommit}] | from_entries' \
+    "$CACHE_DIR/index.json" 2>/dev/null) || REVIEWED_MAP="{}"
+  [[ -n $REVIEWED_MAP ]] || REVIEWED_MAP="{}"
+fi
+
+reviewed_for() {
+  jq -r --arg id "$1" '.[$id] // ""' <<<"$REVIEWED_MAP" 2>/dev/null
+}
+
 check_one() {
   local dir="$1" id
   id=$(basename "$dir")
@@ -58,16 +79,30 @@ check_one() {
   local dirty=false
   [[ -n $(git -C "$dir" status --porcelain 2>/dev/null) ]] && dirty=true
 
+  # The reviewed commit decides it when the marketplace has one, because that
+  # is what an update would actually install. Origin HEAD only decides for a
+  # plugin the marketplace does not list, where there is nothing else to go on.
+  local reviewed target
+  reviewed=$(reviewed_for "$id")
   local behind=false
-  if [[ $status == ok && -n $head && -n $remote_head && $head != "$remote_head" ]]; then
+  if [[ -n $reviewed && -n $head ]]; then
+    target="$reviewed"
+    [[ $head != "$reviewed" ]] && behind=true
+  elif [[ $status == ok && -n $head && -n $remote_head && $head != "$remote_head" ]]; then
+    target="$remote_head"
     behind=true
+  else
+    target="${remote_head:-}"
   fi
 
   jq -nc --arg id "$id" --arg head "$head" --arg remoteHead "${remote_head:-}" \
+    --arg reviewed "${reviewed:-}" --arg target "${target:-}" \
     --arg branch "$branch" --arg status "$status" --arg detail "$detail" \
     --argjson behind "$behind" --argjson dirty "$dirty" \
     '{id: $id, current: $head[0:7], currentFull: $head, remote: $remoteHead[0:7],
-      remoteFull: $remoteHead, branch: $branch, behind: $behind, dirty: $dirty,
+      remoteFull: $remoteHead, reviewed: $reviewed[0:7], reviewedFull: $reviewed,
+      target: $target[0:7], targetFull: $target,
+      branch: $branch, behind: $behind, dirty: $dirty,
       status: $status, detail: $detail}'
 }
 

@@ -54,7 +54,16 @@ Item {
   readonly property bool opened: window.visible
 
   readonly property string pluginId: "io.github.omarcodehub.plugin-manager"
-  readonly property string sourceDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+  // Newer Omarchy strips __sourceDir, __isFirstParty and __hostCapabilities
+  // from the manifest before handing it to a third-party plugin, so this used
+  // to resolve to "" there and every Process below was gated off, leaving the
+  // catalogue, the installed list and the bar badge permanently empty. The
+  // component's own file URL says where it lives and no host sanitising of the
+  // manifest can take that away, so it is the fallback.
+  readonly property string sourceDir: manifest && manifest.__sourceDir
+    ? String(manifest.__sourceDir)
+    : decodeURIComponent(String(Qt.resolvedUrl("."))
+      .replace(/^file:\/\//, "")).replace(/\/$/, "")
   readonly property string binDir: sourceDir === "" ? "" : sourceDir + "/bin"
   readonly property string jobDir: Quickshell.env("XDG_RUNTIME_DIR") + "/io.github.omarcodehub.plugin-manager"
 

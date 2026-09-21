@@ -11,6 +11,28 @@ This project follows [semantic versioning](https://semver.org):
 | **minor** | a new user-visible capability |
 | **patch** | fixes, performance and internals, with no new capability |
 
+## 1.1.1
+
+### Fixed
+
+- **The panel and the installed list could be empty on newer Omarchy.** The
+  shell now strips `__sourceDir` from the manifest before handing it to a
+  third-party plugin, and the panel used that to find its own `bin/` directory.
+  It resolved to nothing, every helper process was gated off, and the
+  marketplace, the installed list and the bar badge all stayed empty with no
+  error anywhere. The bar widget had the same problem by a second route: a
+  third-party widget is given a shell API object that has no plugin registry on
+  it at all, so it could not reach its manifest either. Both now fall back to
+  the component's own file URL, which no host sanitising can take away. Thanks
+  to JMThomas00 for the report and the diagnosis.
+- **The bar badge counted updates the Updates view then refused to show.** The
+  badge asked whether origin had moved, while the panel has asked whether the
+  reviewed commit has moved since 1.1.0. A plugin sitting exactly on its
+  reviewed commit is up to date, so a badge would appear over an empty Updates
+  list whenever any installed plugin's branch head ran ahead of its reviewed
+  commit. The update check now answers the same question the panel does, and
+  falls back to origin only for a plugin the marketplace does not list.
+
 ## 1.1.0
 
 ### Added

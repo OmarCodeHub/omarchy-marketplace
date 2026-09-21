@@ -23,8 +23,16 @@ BarWidget {
     return installed ? installed[root.pluginId] : null
   }
 
-  readonly property string binDir: pluginManifest && pluginManifest.__sourceDir
-    ? String(pluginManifest.__sourceDir) + "/bin" : ""
+  // Two ways this comes back empty on newer Omarchy: a third-party widget gets
+  // a PluginShellApi as `bar.shell`, which has no pluginRegistry at all, so
+  // pluginManifest is null, and even when the manifest is reachable its
+  // __sourceDir has been stripped. Either way the update check never ran and
+  // the badge could never appear. The widget's own file URL is not subject to
+  // either, so it is the fallback.
+  readonly property string binDir: (pluginManifest && pluginManifest.__sourceDir
+    ? String(pluginManifest.__sourceDir)
+    : decodeURIComponent(String(Qt.resolvedUrl("."))
+      .replace(/^file:\/\//, "")).replace(/\/$/, "")) + "/bin"
 
   property int updateCount: 0
   property bool checked: false
