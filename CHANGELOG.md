@@ -11,22 +11,19 @@ This project follows [semantic versioning](https://semver.org):
 | **minor** | a new user-visible capability |
 | **patch** | fixes, performance and internals, with no new capability |
 
-## Unreleased
+## 1.2.0
 
 ### Added
 
-- **A broken inventory now says so.** When `pm-local` fails, Installed and
-  Updates show "Could not read the installed plugins (exit N)." and the header
-  shows it as well. Before, the panel drew an empty list, which read as
-  "nothing is installed" while the bar badge still counted updates.
 - **Display language.** Every string the panel draws now goes through a small
   translation table (`I18n.js`), with Korean as the first language. **Settings
-  → Language** picks Auto, English or 한국어; Auto follows the system locale
+  → Language** picks Auto, English or 한국어. Auto follows the system locale
   and anything without a translation stays in English. The English source text
   is the key, so a string reworded here simply shows in English until its
   translation catches up. `node test-i18n.js` fails when a string in the code
   has no translation or a translation drops a placeholder. Text from outside
-  stays as it arrives, except known catalogue categories and kinds.
+  stays as it arrives, except known catalogue categories and kinds. Thanks to
+  seunghan91 for the translation and the work behind it.
 
 ### Fixed
 
@@ -38,7 +35,12 @@ This project follows [semantic versioning](https://semver.org):
   the bar badge still counted updates. `pm-bar` failed the same way and
   reported "could not parse the shell configuration". Both now pass their JSON
   through file descriptors. `node test-model.js` runs both against the real
-  catalog padded past the limit.
+  catalog padded past the limit. Thanks to Alanus96 for the report
+  and the diagnosis.
+- **A broken inventory now says so.** When `pm-local` fails, Installed and
+  Updates show "Could not read the installed plugins (exit N)." and the header
+  shows it as well. Before, the panel drew an empty list, which read as
+  "nothing is installed" while the bar badge still counted updates.
 
 ## 1.1.1
 
