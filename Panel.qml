@@ -171,6 +171,9 @@ Item {
   property bool loadingStats: false
   readonly property bool busy: loadingCatalog || loadingLocal || checkingUpdates
   property string loadError: ""
+  // Set when pm-local fails. Without it a broken inventory looks exactly like
+  // "nothing installed", which is what the user then believes.
+  property string localError: ""
 
   // ─────────────────────────────────────────────── view state
   property string scope: "browse"
@@ -402,6 +405,7 @@ Item {
     if (root.binDir === "")
       return
     root.loadingLocal = true
+    root.localError = ""
     localProc.running = true
     root.checkingUpdates = true
     updatesProc.running = true
@@ -808,10 +812,18 @@ Item {
         } catch (e) {
           root.localState = null
         }
+        // The exit code says more than this, so it is only the fallback; the
+        // two handlers can run in either order.
+        if ((!root.localState || root.localState.ok !== true) && root.localError === "")
+          root.localError = I18n.later("The installed plugin list could not be parsed.")
         root.rebuild()
       }
     }
-    onExited: root.loadingLocal = false
+    onExited: function (exitCode) {
+      root.loadingLocal = false
+      if (exitCode !== 0)
+        root.localError = I18n.later("Could not read the installed plugins (exit %1).", exitCode)
+    }
   }
 
   Process {
@@ -1102,6 +1114,8 @@ Item {
             text: {
               if (root.loadError !== "")
                 return root.tr(root.loadError)
+              if (root.localError !== "")
+                return root.tr(root.localError)
               if (root.busy)
                 return root.tr("Loading...")
               var bits = []
@@ -1314,6 +1328,8 @@ Item {
                 text: {
                   if (root.loadError !== "")
                     return root.tr(root.loadError)
+                  if (root.localError !== "" && (root.scope === "installed" || root.scope === "updates"))
+                    return root.tr(root.localError)
                   if (root.query !== "")
                     return root.tr("Nothing matches “%1”", root.query)
                   if (root.scope === "updates")
