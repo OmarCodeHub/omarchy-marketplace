@@ -358,6 +358,42 @@ const perKeystroke = Number(process.hrtime.bigint() - t0) / 1e6 / 6
 console.log(`  ${perKeystroke.toFixed(2)}ms per keystroke over ${records.length} records`)
 check("search is under 20ms per keystroke", perKeystroke < 20, `${perKeystroke.toFixed(2)}ms`)
 
+// ---------------------------------------------------------------- large catalog
+
+// Linux caps one argv string at 128 KiB, and the catalog grows with every
+// installed plugin. Run pm-local and pm-bar against the real catalog padded
+// past that, through a stand-in omarchy-plugin-catalog earlier on PATH, so a
+// helper that hands it to jq on the command line fails here, not on a user's
+// machine with a full bar.
+console.log("large catalog (past the 128 KiB argument limit)")
+{
+  const realCatalog = execFileSync("bash", ["-c", "command -v omarchy-plugin-catalog"], { encoding: "utf8" }).trim()
+  const shimDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "pm-test-"))
+  try {
+    const shim = path.join(shimDir, "omarchy-plugin-catalog")
+    fs.writeFileSync(shim,
+      "#!/bin/bash\n" +
+      `'${realCatalog}' | jq -c '. + [range(0; 400) | {id: "pad.\\(.)", name: "pad", description: ("x" * 400), kinds: []}]'\n`,
+      { mode: 0o755 })
+    const env = Object.assign({}, process.env, { PATH: shimDir + ":" + process.env.PATH })
+    const size = execFileSync(shim, [], { env, maxBuffer: 64 * 1024 * 1024 }).length
+    check("padded catalog is past 128 KiB", size > 128 * 1024, `${size} bytes`)
+    for (const script of ["pm-local", "pm-bar"]) {
+      let out = null
+      try {
+        out = JSON.parse(execFileSync(path.join(dir, "bin", script), [], {
+          encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+        }))
+      } catch (e) {
+        out = { ok: false, error: String(e.stderr || e.message).trim() }
+      }
+      check(`${script} works with a catalog past 128 KiB`, out && out.ok === true, out && out.error)
+    }
+  } finally {
+    fs.rmSync(shimDir, { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------- report
 
 console.log(`\n${passed} passed, ${failed} failed`)
