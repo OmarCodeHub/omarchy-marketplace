@@ -45,11 +45,18 @@ catalog=$(omarchy-plugin-catalog 2>/dev/null) || catalog="[]"
 plugins=$(omarchy plugin list --json 2>/dev/null) || plugins="[]"
 [[ -n $plugins ]] || plugins="[]"
 
+# Through file descriptors rather than argv, for the reason given in pm-local:
+# one argument is capped at 128 KiB, and the catalog alone can pass that.
+# --slurpfile wraps each document in an array, unwrapped once at the top.
 jq -nc \
-  --argjson config "$config" \
-  --argjson catalog "$catalog" \
-  --argjson plugins "$plugins" \
+  --slurpfile configDoc <(printf '%s' "$config") \
+  --slurpfile catalogDoc <(printf '%s' "$catalog") \
+  --slurpfile pluginsDoc <(printf '%s' "$plugins") \
   --arg source "$source" '
+  $configDoc[0] as $config
+  | $catalogDoc[0] as $catalog
+  | $pluginsDoc[0] as $plugins
+  |
   # A layout entry is either a bare id or an object carrying the id plus that
   # widget entry inline settings. Both shapes have to be understood.
   def entry_id: if type == "object" then .id else . end;

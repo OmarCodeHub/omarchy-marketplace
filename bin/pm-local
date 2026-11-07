@@ -59,13 +59,18 @@ git_facts() {
 locals=$(git_facts | jq -sc '.')
 [[ -n $locals ]] || locals="[]"
 
+# The documents go in through file descriptors, not argv. Linux caps a single
+# argument at 128 KiB (MAX_ARG_STRLEN), and the catalog grows with every
+# installed plugin, so --argjson fails with "Argument list too long" once it
+# passes that. printf is a builtin, so nothing here goes through execve.
+# --slurpfile wraps each document in an array, hence the [0].
 jq -nc \
-  --argjson list "$list" \
-  --argjson catalog "$catalog" \
-  --argjson locals "$locals" '
-  ($catalog | map({key: .id, value: .}) | from_entries) as $cat
-  | ($locals | map({key: .id, value: .}) | from_entries) as $loc
-  | [ $list[]
+  --slurpfile list <(printf '%s' "$list") \
+  --slurpfile catalog <(printf '%s' "$catalog") \
+  --slurpfile locals <(printf '%s' "$locals") '
+  ($catalog[0] | map({key: .id, value: .}) | from_entries) as $cat
+  | ($locals[0] | map({key: .id, value: .}) | from_entries) as $loc
+  | [ $list[0][]
       | . as $p
       | ($cat[$p.id] // {}) as $c
       | ($loc[$p.id] // {}) as $l

@@ -24,6 +24,18 @@ This project follows [semantic versioning](https://semver.org):
   has no translation or a translation drops a placeholder. Text from outside
   stays as it arrives, except known catalogue categories and kinds.
 
+### Fixed
+
+- **Installed and Updates were empty once the local catalog passed 128 KiB.**
+  `pm-local` and `pm-bar` handed the catalog to `jq` as one command-line
+  argument, and Linux refuses any single argument over 128 KiB. The catalog
+  grows with every installed plugin, so with enough of them `pm-local` died
+  with "Argument list too long" and the panel showed nothing installed, while
+  the bar badge still counted updates. `pm-bar` failed the same way and
+  reported "could not parse the shell configuration". Both now pass their JSON
+  through file descriptors. `node test-model.js` runs both against the real
+  catalog padded past the limit.
+
 ## 1.1.1
 
 ### Fixed
