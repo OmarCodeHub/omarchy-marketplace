@@ -32,7 +32,8 @@
     "defaultSection": "right",
     "defaults": {
       "updateCheckMinutes": 180,
-      "showInBar": "always"
+      "showInBar": "always",
+      "language": "auto"
     },
     "schema": [
       {
