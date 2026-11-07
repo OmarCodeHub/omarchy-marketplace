@@ -15,6 +15,10 @@ This project follows [semantic versioning](https://semver.org):
 
 ### Added
 
+- **A broken inventory now says so.** When `pm-local` fails, Installed and
+  Updates show "Could not read the installed plugins (exit N)." and the header
+  shows it as well. Before, the panel drew an empty list, which read as
+  "nothing is installed" while the bar badge still counted updates.
 - **Display language.** Every string the panel draws now goes through a small
   translation table (`I18n.js`), with Korean as the first language. **Settings
   → Language** picks Auto, English or 한국어; Auto follows the system locale
